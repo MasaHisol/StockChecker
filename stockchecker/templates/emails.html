@@ -1,15 +1,18 @@
 {% extends "base.html" %}
 {% block body %}
-<div class="card scroll">
-<h1>メール</h1>
-<table>
-<tr><th>作成</th><th>種別</th><th>宛先</th><th>件名</th><th>状態</th></tr>
+<div class="page-head"><div><h1>メール</h1><div class="sub">見積依頼・注文・担当者通知の下書きと送信履歴</div></div></div>
+<div class="card flush">
+{% if rows %}
+<div class="scroll"><table>
+<thead><tr><th>作成</th><th>種別</th><th>件名</th><th>宛先</th><th>状態</th></tr></thead>
+<tbody>
 {% for e in rows %}
-<tr><td class="muted">{{ e.created_at }}</td>
-<td>{{ {'rfq':'見積依頼','order':'注文','alert':'担当者通知'}.get(e.kind, e.kind) }}</td>
-<td>{{ e.to_addr }}</td><td><a href="{{ url_for('email_edit', eid=e.id) }}">{{ e.subject }}</a></td>
-<td><span class="tag {{ {'draft':'w','sent':'ok','failed':'q'}[e.status] }}">{{ {'draft':'下書き','sent':'送信済','failed':'失敗'}[e.status] }}</span></td></tr>
-{% else %}<tr><td colspan="5" class="muted">メールはありません。</td></tr>{% endfor %}
-</table>
+<tr><td class="muted small nowrap">{{ e.created_at[:16] }}</td>
+<td class="nowrap">{{ kind_labels[e.kind] }}</td>
+<td><a href="{{ url_for('email_edit', eid=e.id) }}">{{ e.subject }}</a>{% if e.material_name %}<div class="muted small">{{ e.material_name }}</div>{% endif %}</td>
+<td class="small">{{ e.to_addr }}</td><td>{{ status_pill(e.status) }}</td></tr>
+{% endfor %}
+</tbody></table></div>
+{% else %}<div class="empty">まだメールはありません。要見積の部材があるとチェック時に自動で下書きされます。</div>{% endif %}
 </div>
 {% endblock %}

@@ -43,7 +43,7 @@ def test_pages(tmp_path):
     assert c.post("/run-checks", data={"demo": "1"}).status_code == 302
     r = c.post("/materials/1/rfq", data={"supplier_id": 1})
     assert r.status_code == 302
-    for url in ["/", "/materials/1", "/emails", "/masters", "/import", "/materials/new",
+    for url in ["/", "/materials/1", "/emails", "/masters", "/import", "/materials/new", "/sources",
                 "/materials/1/edit", r.headers["Location"]]:
         assert c.get(url).status_code == 200, url
     r = c.post("/materials/1/order", data={"supplier_id": 1, "quantity": 5, "unit_price": "100"})

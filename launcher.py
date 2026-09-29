@@ -42,15 +42,23 @@ starttls = 1
 
 [sources]
 ; ネット上の一般価格・納期の自動取得。キーを入れた取得元だけが使われます
+; ---- 無料 ----
+; 部材に登録した商品ページ URL を巡回して価格を読む (キー不要)
+page_watch = 1
+; Yahoo!ショッピング: https://e.developer.yahoo.co.jp/ でアプリ登録 → Client ID
+yahoo_app_id =
+; 楽天市場: https://webservice.rakuten.co.jp/ でアプリ登録 → アプリ ID
+rakuten_app_id =
 ; Mouser (電子部品): https://www.mouser.jp/api-hub/ で無料発行
 mouser_api_key =
 ; Digi-Key (電子部品): https://developer.digikey.com/ でアプリ登録 (Production)
 digikey_client_id =
 digikey_client_secret =
+; ---- 有料 (任意) ----
 ; Web 検索 (機構部品・鋼材・汎用品など何でも): https://console.anthropic.com/ で発行 (従量課金)
 anthropic_api_key =
 ; off / fallback (API で見つからない部材のみ・推奨) / always
-web_search = fallback
+web_search = off
 ; 同じ部材を Web 検索する最短間隔 (日)。費用を抑えるため
 web_search_interval_days = 7
 
@@ -75,6 +83,9 @@ ENV_MAP = {
     ("smtp", "user"): "SC_SMTP_USER",
     ("smtp", "password"): "SC_SMTP_PASSWORD",
     ("smtp", "starttls"): "SC_SMTP_STARTTLS",
+    ("sources", "page_watch"): "SC_PAGE_WATCH",
+    ("sources", "yahoo_app_id"): "SC_YAHOO_APP_ID",
+    ("sources", "rakuten_app_id"): "SC_RAKUTEN_APP_ID",
     ("sources", "mouser_api_key"): "SC_MOUSER_API_KEY",
     ("sources", "digikey_client_id"): "SC_DIGIKEY_CLIENT_ID",
     ("sources", "digikey_client_secret"): "SC_DIGIKEY_CLIENT_SECRET",

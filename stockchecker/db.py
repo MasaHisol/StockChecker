@@ -17,6 +17,9 @@ def init_db(conn):
     for col in ("vendor", "url", "detail"):
         if col not in cols:
             conn.execute(f"ALTER TABLE price_observations ADD COLUMN {col} TEXT")
+    mcols = {r["name"] for r in conn.execute("PRAGMA table_info(materials)")}
+    if "watch_urls" not in mcols:
+        conn.execute("ALTER TABLE materials ADD COLUMN watch_urls TEXT")
     conn.commit()
 
 

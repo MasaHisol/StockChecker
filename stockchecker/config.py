@@ -36,6 +36,9 @@ class Settings:
     mouser_api_key: str = ""
     digikey_client_id: str = ""
     digikey_client_secret: str = ""
+    yahoo_app_id: str = ""
+    rakuten_app_id: str = ""
+    page_watch: bool = True     # 商品ページ URL の巡回 (キー不要)
     anthropic_api_key: str = ""
     # Web 検索 (Claude): off / fallback (API で見つからない部材のみ) / always
     web_search: str = "fallback"
@@ -61,6 +64,9 @@ class Settings:
         s.mouser_api_key = e("SC_MOUSER_API_KEY", s.mouser_api_key)
         s.digikey_client_id = e("SC_DIGIKEY_CLIENT_ID", s.digikey_client_id)
         s.digikey_client_secret = e("SC_DIGIKEY_CLIENT_SECRET", s.digikey_client_secret)
+        s.yahoo_app_id = e("SC_YAHOO_APP_ID", s.yahoo_app_id)
+        s.rakuten_app_id = e("SC_RAKUTEN_APP_ID", s.rakuten_app_id)
+        s.page_watch = _env_bool("SC_PAGE_WATCH", s.page_watch)
         s.anthropic_api_key = e("ANTHROPIC_API_KEY", s.anthropic_api_key)
         s.web_search = e("SC_WEB_SEARCH", s.web_search).lower()
         s.web_search_interval_days = int(e("SC_WEB_SEARCH_INTERVAL_DAYS", s.web_search_interval_days))

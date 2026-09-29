@@ -1,13 +1,11 @@
 {% extends "base.html" %}
 {% block body %}
-<div class="card">
-<h1>価格表 CSV 取込</h1>
-<p class="muted">商社の価格表や相場データを取り込みます。ヘッダ: <code>part_number,unit_price,lead_time_days,stock_qty,min_order_qty,currency,observed_at</code> (part_number 以外は任意)</p>
-<form method="post" enctype="multipart/form-data">
-  <label>CSV ファイル</label><input type="file" name="file" accept=".csv,text/csv">
-  <label>または貼り付け</label><textarea name="text" style="min-height:140px" placeholder="part_number,unit_price,lead_time_days&#10;STM32F407VGT6,1520,60"></textarea>
-  <label>仕入先 (任意)</label><select name="supplier_id"><option value="">-</option>{% for s in suppliers %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}</select>
-  <p><button>取込</button></p>
+<div class="page-head"><div><h1>価格表の取込</h1><div class="sub">商社の価格表や見積一覧 (CSV) をまとめて取り込みます</div></div></div>
+<form method="post" enctype="multipart/form-data" class="card">
+  <label class="f">CSV ファイル</label><input type="file" name="file" accept=".csv,text/csv">
+  <label class="f">または貼り付け</label><textarea name="text" placeholder="part_number,unit_price,lead_time_days&#10;STM32F407VGT6,1520,60"></textarea>
+  <div class="hint">1 行目は見出し: <code>part_number,unit_price,lead_time_days,stock_qty,min_order_qty,currency,observed_at</code> (part_number 以外は省略可)。Excel の「CSV UTF-8」で保存したものに対応しています。</div>
+  <label class="f">仕入先 (任意)</label><select name="supplier_id"><option value="">—</option>{% for s in suppliers %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}</select>
+  <p><button>取り込む</button></p>
 </form>
-</div>
 {% endblock %}

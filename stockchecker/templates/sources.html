@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head"><div><h1>価格の取得元</h1><div class="sub">ネット上の一般価格・納期をどこから自動取得するか。設定は stockchecker.ini の [sources] で変更し、アプリを再起動してください。</div></div></div>
+<form method="post" action="{{ url_for('sources_test') }}" class="card">
+  <h2>商品ページの読み取りテスト</h2>
+  <div class="row"><input name="url" type="url" required value="{{ test or '' }}" placeholder="https://www.monotaro.com/g/..." style="flex:1;min-width:240px"><button>テストする</button></div>
+  <div class="hint">監視したい商品ページの URL を入れると、価格・納期を自動で読み取れるか確認できます。</div>
+</form>
+<div class="grid g2">
+{% for s in source_info %}
+<div class="card">
+  <div class="row" style="justify-content:space-between"><h2 style="margin:0">{{ s.name }}</h2>
+    <div class="row">{% if s.free %}<span class="pill info">無料</span>{% else %}<span class="pill warn">従量課金</span>{% endif %}
+    {% if s.on %}<span class="pill good">✓ 有効</span>{% else %}<span class="pill off">未設定</span>{% endif %}</div></div>
+  <p class="small" style="margin:10px 0 6px">{{ s.desc }}</p>
+  <dl class="dl small"><dt>向いている部材</dt><dd>{{ s.fit }}</dd><dt>設定</dt><dd>{{ s.how|safe }}</dd></dl>
+</div>
+{% endfor %}
+</div>
+{% endblock %}

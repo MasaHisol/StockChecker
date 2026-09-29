@@ -1,24 +1,28 @@
 {% extends "base.html" %}
 {% block body %}
-<div class="grid" style="gap:16px">
-<div class="card scroll">
-<h2>担当者</h2>
-<table><tr><th>氏名</th><th>メール</th><th>Slack</th></tr>
-{% for s in staff %}<tr><td>{{ s.name }}</td><td>{{ s.email }}</td><td>{{ '設定済' if s.slack_webhook else '-' }}</td></tr>{% endfor %}</table>
-<form method="post"><input type="hidden" name="type" value="staff">
-  <label>氏名</label><input name="name" required><label>メール</label><input name="email" type="email" required>
-  <label>Slack/Teams Incoming Webhook URL (任意)</label><input name="slack_webhook">
+<div class="page-head"><div><h1>担当者・仕入先</h1></div></div>
+<div class="grid g2">
+<div>
+<div class="card flush"><h2>担当者 <span class="muted small">アラートの通知先</span></h2>
+{% if staff %}<table><thead><tr><th>氏名</th><th>メール</th><th>チャット通知</th></tr></thead><tbody>
+{% for s in staff %}<tr><td>{{ s.name }}</td><td class="small">{{ s.email }}</td><td>{% if s.slack_webhook %}<span class="pill good">設定済</span>{% else %}<span class="pill off">なし</span>{% endif %}</td></tr>{% endfor %}</tbody></table>
+{% else %}<div class="empty">まだ登録がありません。</div>{% endif %}</div>
+<form method="post" class="card"><input type="hidden" name="type" value="staff"><h2>担当者を追加</h2>
+  <div class="form-grid"><div><label class="f">氏名</label><input name="name" required></div><div><label class="f">メール</label><input name="email" type="email" required></div></div>
+  <label class="f">Slack / Teams の Incoming Webhook URL (任意)</label><input name="slack_webhook">
   <p><button>追加</button></p></form>
 </div>
-<div class="card scroll">
-<h2>仕入先</h2>
-<table><tr><th>社名</th><th>担当</th><th>メール</th><th>見積依頼 自動送信</th></tr>
-{% for s in suppliers %}<tr><td>{{ s.name }}</td><td>{{ s.contact_name or '-' }}</td><td>{{ s.email }}</td>
-<td><form method="post" action="{{ url_for('supplier_toggle', sid=s.id) }}"><button class="sub">{{ 'ON' if s.auto_send_rfq else 'OFF' }}</button></form></td></tr>{% endfor %}</table>
-<form method="post"><input type="hidden" name="type" value="supplier">
-  <label>社名</label><input name="name" required><label>担当者名</label><input name="contact_name">
-  <label>メール</label><input name="email" type="email" required>
-  <label class="row"><input type="checkbox" name="auto_send_rfq" value="1" style="width:auto"> 見積依頼を自動送信する (全体設定 SC_AUTO_SEND=1 も必要)</label>
+<div>
+<div class="card flush"><h2>仕入先 <span class="muted small">見積依頼・注文の送り先</span></h2>
+{% if suppliers %}<table><thead><tr><th>社名</th><th>メール</th><th>見積依頼の自動送信</th></tr></thead><tbody>
+{% for s in suppliers %}<tr><td>{{ s.name }}<div class="muted small">{{ s.contact_name or '' }}</div></td><td class="small">{{ s.email }}</td>
+<td><form method="post" action="{{ url_for('supplier_toggle', sid=s.id) }}"><button class="sm {{ '' if s.auto_send_rfq else 'ghost' }}">{{ 'ON' if s.auto_send_rfq else 'OFF' }}</button></form></td></tr>{% endfor %}</tbody></table>
+{% else %}<div class="empty">まだ登録がありません。</div>{% endif %}</div>
+<form method="post" class="card"><input type="hidden" name="type" value="supplier"><h2>仕入先を追加</h2>
+  <div class="form-grid"><div><label class="f">社名</label><input name="name" required></div><div><label class="f">ご担当者名</label><input name="contact_name"></div></div>
+  <label class="f">メール</label><input name="email" type="email" required>
+  <label class="row f" style="font-weight:500"><input type="checkbox" name="auto_send_rfq" value="1" style="width:auto"> 見積依頼を確認なしで自動送信する</label>
+  <div class="hint">自動送信は全体設定 (stockchecker.ini の auto_send = 1) も ON のときだけ動きます。現在: {{ 'ON' if settings.auto_send_enabled else 'OFF' }}</div>
   <p><button>追加</button></p></form>
 </div>
 </div>

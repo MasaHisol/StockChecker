@@ -1,79 +1,137 @@
 {% extends "base.html" %}
 {% block body %}
-<div class="card">
-  <div class="row" style="justify-content:space-between">
-    <h1>{{ m.name }} <span class="muted">{{ m.part_number }}</span></h1>
-    <div class="row">
-      <form method="post" action="{{ url_for('fetch_now', mid=m.id) }}"><button>ネットで最新価格を取得</button></form>
-      <a class="btn sub" href="{{ url_for('material_edit', mid=m.id) }}">編集</a>
-      <form method="post" action="{{ url_for('material_delete', mid=m.id) }}" onsubmit="return confirm('無効化しますか？')"><button class="danger">無効化</button></form>
-    </div>
+{% set nq = findings|selectattr('needs_quote')|list|length %}
+<div class="page-head">
+  <div>
+    <div class="sub"><a href="{{ url_for('index') }}">ダッシュボード</a> / 部材</div>
+    <h1>{{ m.name }}</h1>
+    <div class="sub">{{ m.part_number }}{% if m.maker %} ・ {{ m.maker }}{% endif %}{% if m.custom_item %} ・ <span class="pill info">特注品</span>{% endif %}</div>
   </div>
-  <div class="muted">{{ m.maker or '' }} {{ m.spec or '' }}　数量 {{ m.quantity }} {{ m.unit }}　必要納期 {{ m.required_date or '-' }}　予算単価 {{ m.budget_unit_price or '-' }}{% if m.custom_item %}　<span class="tag w">特注品</span>{% endif %}</div>
-  <div style="margin-top:10px">
-  {% for f in findings %}<div><span class="tag {{ 'q' if f.needs_quote else 'w' }}">{{ '要見積' if f.needs_quote else '注意' }}</span> {{ f.message }}</div>
-  {% else %}<span class="tag ok">問題なし</span>{% endfor %}
+  <div class="row">
+    <form method="post" action="{{ url_for('fetch_now', mid=m.id) }}"><button>ネットで最新価格を取得</button></form>
+    <a class="btn ghost" href="{{ url_for('material_edit', mid=m.id) }}">編集</a>
+    <form method="post" action="{{ url_for('material_delete', mid=m.id) }}" onsubmit="return confirm('この部材を一覧から外しますか？')"><button class="danger">無効化</button></form>
   </div>
 </div>
 
-<div class="grid" style="gap:16px">
+<div class="card" style="border-left:4px solid {{ 'var(--crit)' if nq else ('var(--warn)' if findings else 'var(--good)') }}">
+  <div class="row" style="justify-content:space-between">
+    <div>{% if nq %}<span class="pill crit">● 見積が必要です</span>{% elif findings %}<span class="pill warn">▲ 注意があります</span>{% else %}<span class="pill good">✓ 問題ありません</span>{% endif %}</div>
+    {% if nq and m.preferred_supplier_id %}<form method="post" action="{{ url_for('make_rfq', mid=m.id) }}"><input type="hidden" name="supplier_id" value="{{ m.preferred_supplier_id }}"><button class="sm">主仕入先に見積依頼を作成</button></form>{% endif %}
+  </div>
+  {% if findings %}<ul class="reasons" style="font-size:13px;margin-top:10px">{% for f in findings %}<li>{{ f.message }}</li>{% endfor %}</ul>{% endif %}
+</div>
+
+<div class="kpis">
+  <div class="kpi"><div class="label">一般単価</div><div class="value">{% if obs and obs[0].unit_price is not none %}¥{{ obs[0].unit_price|yen }}{% else %}—{% endif %}</div>
+    {% if m.budget_unit_price %}<div class="small muted">予算 ¥{{ m.budget_unit_price|yen }}</div>{% endif %}</div>
+  <div class="kpi"><div class="label">一般納期</div><div class="value">{% if obs and obs[0].lead_time_days is not none %}{{ obs[0].lead_time_days }}<small>日</small>{% else %}—{% endif %}</div>
+    <div class="small muted">必要納期 {{ m.required_date or '—' }}</div></div>
+  <div class="kpi"><div class="label">必要数量 / 流通在庫</div><div class="value">{{ '{:,}'.format(m.quantity) }}<small>{{ m.unit }}</small></div>
+    <div class="small muted">在庫 {{ '{:,}'.format(obs[0].stock_qty) if obs and obs[0].stock_qty is not none else '不明' }}</div></div>
+  <div class="kpi"><div class="label">概算金額</div><div class="value">{% if obs and obs[0].unit_price is not none %}¥{{ (obs[0].unit_price * m.quantity)|yen }}{% else %}—{% endif %}</div>
+    <div class="small muted">{{ obs[0].observed_at[:10] if obs else '未取得' }}{% if obs and obs[0].vendor %} ・ {{ obs[0].vendor }}{% endif %}</div></div>
+</div>
+
+<div class="grid g2">
+<div class="card">
+  <h2>単価の推移</h2>
+  {% if chart|length > 1 %}
+  <div class="chart" id="chart" data-points='{{ chart|tojson }}'>
+    <svg viewBox="0 0 640 200" role="img" aria-label="単価の推移"></svg><div class="tip"></div>
+  </div>
+  {% else %}<div class="empty">記録が 2 件以上になるとグラフが表示されます。</div>{% endif %}
+</div>
+<div class="card">
+  <h2>部材情報</h2>
+  <dl class="dl">
+    <dt>仕様</dt><dd>{{ m.spec or '—' }}</dd>
+    <dt>担当者</dt><dd>{% for s in staff if s.id == m.owner_id %}{{ s.name }}{% else %}—{% endfor %}</dd>
+    <dt>主仕入先</dt><dd>{% for s in suppliers if s.id == m.preferred_supplier_id %}{{ s.name }}{% else %}—{% endfor %}</dd>
+    <dt>監視ページ</dt><dd>{% for u in (m.watch_urls or '').splitlines() if u.strip() %}<div class="small" style="word-break:break-all"><a href="{{ u }}" target="_blank" rel="noopener">{{ u }}</a></div>{% else %}<span class="muted">未登録 — <a href="{{ url_for('material_edit', mid=m.id) }}">商品ページを登録</a>すると無料で自動追跡します</span>{% endfor %}</dd>
+    <dt>備考</dt><dd>{{ m.notes or '—' }}</dd>
+  </dl>
+</div>
+</div>
+
+<div class="grid g3">
 <div class="card">
   <h2>見積依頼メールを作成</h2>
   <form method="post" action="{{ url_for('make_rfq', mid=m.id) }}">
-    <label>仕入先</label><select name="supplier_id" required>{% for s in suppliers %}<option value="{{ s.id }}" {{ 'selected' if m.preferred_supplier_id == s.id }}>{{ s.name }}</option>{% endfor %}</select>
-    <p><button>下書き作成</button></p>
+    <label class="f">依頼先</label><select name="supplier_id" required>{% for s in suppliers %}<option value="{{ s.id }}" {{ 'selected' if m.preferred_supplier_id == s.id }}>{{ s.name }}</option>{% endfor %}</select>
+    <p><button>下書きを作成</button></p>
   </form>
+  {% if not suppliers %}<div class="hint">先に<a href="{{ url_for('master_page') }}">仕入先</a>を登録してください。</div>{% endif %}
 </div>
 <div class="card">
   <h2>注文メールを作成</h2>
   <form method="post" action="{{ url_for('make_order', mid=m.id) }}">
-    <label>仕入先</label><select name="supplier_id" required>{% for s in suppliers %}<option value="{{ s.id }}" {{ 'selected' if m.preferred_supplier_id == s.id }}>{{ s.name }}</option>{% endfor %}</select>
-    <div class="grid"><div><label>数量</label><input name="quantity" type="number" value="{{ m.quantity }}"></div>
-    <div><label>単価 (円)</label><input name="unit_price" required value="{{ obs[0].unit_price if obs and obs[0].unit_price is not none else '' }}"></div></div>
-    <label>納期</label><input name="delivery_date" type="date" value="{{ m.required_date or '' }}">
-    <p><button>下書き作成</button></p>
+    <label class="f">発注先</label><select name="supplier_id" required>{% for s in suppliers %}<option value="{{ s.id }}" {{ 'selected' if m.preferred_supplier_id == s.id }}>{{ s.name }}</option>{% endfor %}</select>
+    <div class="form-grid" style="grid-template-columns:1fr 1fr"><div><label class="f">数量</label><input name="quantity" type="number" value="{{ m.quantity }}"></div>
+    <div><label class="f">単価 (円)</label><input name="unit_price" required value="{{ (obs[0].unit_price|yen).replace(',', '') if obs and obs[0].unit_price is not none else '' }}"></div></div>
+    <label class="f">納期</label><input name="delivery_date" type="date" value="{{ m.required_date or '' }}">
+    <p><button>下書きを作成</button></p>
   </form>
 </div>
 <div class="card">
-  <h2>価格・納期を記録 (見積回答など)</h2>
+  <h2>見積回答などを記録</h2>
   <form method="post" action="{{ url_for('add_observation', mid=m.id) }}">
-    <div class="grid">
-      <div><label>単価 (円)</label><input name="unit_price"></div>
-      <div><label>納期 (日)</label><input name="lead_time_days" type="number"></div>
-      <div><label>在庫数</label><input name="stock_qty" type="number"></div>
-      <div><label>種別</label><select name="source"><option value="quote">見積回答</option><option value="manual">一般価格(手入力)</option></select></div>
+    <div class="form-grid" style="grid-template-columns:1fr 1fr">
+      <div><label class="f">単価 (円)</label><input name="unit_price"></div>
+      <div><label class="f">納期 (日)</label><input name="lead_time_days" type="number"></div>
+      <div><label class="f">在庫数</label><input name="stock_qty" type="number"></div>
+      <div><label class="f">種別</label><select name="source"><option value="quote">見積回答</option><option value="manual">一般価格</option></select></div>
     </div>
-    <label>仕入先</label><select name="supplier_id"><option value="">-</option>{% for s in suppliers %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}</select>
-    <p><button>記録</button></p>
+    <label class="f">仕入先</label><select name="supplier_id"><option value="">—</option>{% for s in suppliers %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}</select>
+    <p><button>記録する</button></p>
   </form>
 </div>
 </div>
 
-<div class="card scroll">
-  <h2>価格・納期の推移</h2>
-  {% if chart|length > 1 %}
-  {% set ps = chart|map(attribute='p')|list %}{% set lo = ps|min %}{% set hi = ps|max %}{% set span = (hi - lo) or 1 %}
-  <svg viewBox="0 0 600 140" style="width:100%;max-width:600px;height:auto" role="img" aria-label="単価推移">
-    <polyline fill="none" stroke="var(--accent)" stroke-width="2" points="{% for c in chart %}{{ 20 + loop.index0 * 560 / (chart|length - 1) }},{{ 120 - (c.p - lo) / span * 100 }} {% endfor %}"/>
-    {% for c in chart %}<circle cx="{{ 20 + loop.index0 * 560 / (chart|length - 1) }}" cy="{{ 120 - (c.p - lo) / span * 100 }}" r="3" fill="var(--accent)"><title>{{ c.t }}: {{ c.p }} 円</title></circle>{% endfor %}
-    <text x="4" y="14" font-size="11" fill="var(--muted)">{{ '{:,.0f}'.format(hi) }}</text><text x="4" y="136" font-size="11" fill="var(--muted)">{{ '{:,.0f}'.format(lo) }}</text>
-  </svg>
-  {% endif %}
-  <table>
-  <tr><th>日時</th><th>取得元</th><th>販売元 / 仕入先</th><th class="num">単価</th><th class="num">納期</th><th class="num">在庫</th></tr>
-  {% for o in obs %}<tr><td class="muted">{{ o.observed_at }}</td><td>{{ o.source }}</td><td>{% if o.url %}<a href="{{ o.url }}" target="_blank" rel="noopener">{{ o.vendor or 'リンク' }}</a>{% else %}{{ o.vendor or o.supplier_name or '-' }}{% endif %}
-    {% if o.detail %}<details><summary class="muted" style="font-size:12px">比較した {{ (o.detail|fromjson)|length }} 件</summary>
-    {% for d in o.detail|fromjson %}<div style="font-size:12px">{% if d.url %}<a href="{{ d.url }}" target="_blank" rel="noopener">{{ d.vendor }}</a>{% else %}{{ d.vendor }}{% endif %}:
-      {{ d.unit_price if d.unit_price is not none else '-' }} 円 / {{ d.lead_time_days if d.lead_time_days is not none else '-' }} 日 / 在庫 {{ d.stock_qty if d.stock_qty is not none else '-' }}{% if d.note %} <span class="muted">({{ d.note }})</span>{% endif %}</div>{% endfor %}
+<div class="card flush">
+  <h2>価格・納期の履歴</h2>
+  <div class="scroll"><table>
+  <thead><tr><th>日時</th><th>取得元</th><th>販売元</th><th class="num">単価</th><th class="num">納期</th><th class="num">在庫</th></tr></thead>
+  <tbody>
+  {% for o in obs %}<tr><td class="muted small nowrap">{{ o.observed_at[:16] }}</td><td class="small">{{ source_labels.get(o.source, o.source) }}</td>
+  <td>{% if o.url %}<a href="{{ o.url }}" target="_blank" rel="noopener">{{ o.vendor or 'リンク' }}</a>{% else %}{{ o.vendor or o.supplier_name or '—' }}{% endif %}
+    {% if o.detail %}<details><summary class="muted small">比較した {{ (o.detail|fromjson)|length }} 件</summary>
+    {% for d in o.detail|fromjson %}<div class="small">{% if d.url %}<a href="{{ d.url }}" target="_blank" rel="noopener">{{ d.vendor }}</a>{% else %}{{ d.vendor }}{% endif %}：
+      {{ '¥' ~ (d.unit_price|yen) if d.unit_price is not none else '—' }} / {{ d.lead_time_days if d.lead_time_days is not none else '—' }} 日 / 在庫 {{ d.stock_qty if d.stock_qty is not none else '—' }}{% if d.note %} <span class="muted">({{ d.note }})</span>{% endif %}</div>{% endfor %}
     </details>{% endif %}</td>
-  <td class="num">{{ o.unit_price if o.unit_price is not none else '-' }}</td><td class="num">{{ o.lead_time_days if o.lead_time_days is not none else '-' }}</td><td class="num">{{ o.stock_qty if o.stock_qty is not none else '-' }}</td></tr>
-  {% else %}<tr><td colspan="6" class="muted">記録なし</td></tr>{% endfor %}
-  </table>
+  <td class="num">{{ '¥' ~ (o.unit_price|yen) if o.unit_price is not none else '—' }}</td><td class="num">{{ o.lead_time_days if o.lead_time_days is not none else '—' }}</td><td class="num">{{ '{:,}'.format(o.stock_qty) if o.stock_qty is not none else '—' }}</td></tr>
+  {% endfor %}
+  </tbody></table></div>
+  {% if not obs %}<div class="empty">まだ記録がありません。「ネットで最新価格を取得」を押すか、見積回答を記録してください。</div>{% endif %}
 </div>
 
-<div class="card scroll">
+<div class="card flush">
   <h2>メール履歴</h2>
-  <table>{% for e in emails %}<tr><td>{{ e.created_at }}</td><td>{{ e.kind }}</td><td><a href="{{ url_for('email_edit', eid=e.id) }}">{{ e.subject }}</a></td><td>{{ e.status }}</td></tr>
-  {% else %}<tr><td class="muted">なし</td></tr>{% endfor %}</table>
+  {% if emails %}<div class="scroll"><table><tbody>{% for e in emails %}<tr><td class="muted small nowrap">{{ e.created_at[:16] }}</td><td class="nowrap">{{ kind_labels[e.kind] }}</td><td><a href="{{ url_for('email_edit', eid=e.id) }}">{{ e.subject }}</a></td><td>{{ status_pill(e.status) }}</td></tr>{% endfor %}</tbody></table></div>
+  {% else %}<div class="empty">まだメールはありません。</div>{% endif %}
 </div>
+
+<script>
+(function(){
+  var el=document.getElementById('chart'); if(!el) return;
+  var pts=JSON.parse(el.dataset.points), svg=el.querySelector('svg'), tip=el.querySelector('.tip');
+  var W=640,H=200,L=56,R=12,T=12,B=26, ps=pts.map(function(p){return p.p});
+  var lo=Math.min.apply(null,ps), hi=Math.max.apply(null,ps), pad=(hi-lo)*.15||hi*.05||1; lo-=pad; hi+=pad;
+  function x(i){return L+i*(W-L-R)/(pts.length-1)} function y(v){return T+(hi-v)/(hi-lo)*(H-T-B)}
+  var ns='http://www.w3.org/2000/svg', h='';
+  for(var k=0;k<=3;k++){var v=lo+(hi-lo)*k/3,yy=y(v);h+='<line x1="'+L+'" x2="'+(W-R)+'" y1="'+yy+'" y2="'+yy+'" stroke="var(--line)" stroke-width="1"/>'+
+    '<text x="'+(L-8)+'" y="'+(yy+4)+'" text-anchor="end" font-size="11" fill="var(--muted)">¥'+Math.round(v).toLocaleString()+'</text>';}
+  h+='<text x="'+L+'" y="'+(H-6)+'" font-size="11" fill="var(--muted)">'+pts[0].t+'</text><text x="'+(W-R)+'" y="'+(H-6)+'" font-size="11" text-anchor="end" fill="var(--muted)">'+pts[pts.length-1].t+'</text>';
+  h+='<polyline fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" points="'+pts.map(function(p,i){return x(i)+','+y(p.p)}).join(' ')+'"/>';
+  pts.forEach(function(p,i){h+='<circle cx="'+x(i)+'" cy="'+y(p.p)+'" r="4" fill="var(--accent)" stroke="var(--surface)" stroke-width="2"/>'});
+  h+='<line id="xh" y1="'+T+'" y2="'+(H-B)+'" stroke="var(--muted)" stroke-dasharray="3 3" visibility="hidden"/>';
+  svg.innerHTML=h; var xh=svg.querySelector('#xh');
+  svg.addEventListener('mousemove',function(e){var r=svg.getBoundingClientRect(),sx=(e.clientX-r.left)*W/r.width,
+    i=Math.max(0,Math.min(pts.length-1,Math.round((sx-L)/((W-L-R)/(pts.length-1))))),p=pts[i];
+    xh.setAttribute('x1',x(i));xh.setAttribute('x2',x(i));xh.setAttribute('visibility','visible');
+    tip.style.display='block';var px=x(i)*r.width/W;tip.style.left=px+'px';tip.style.transform='translate('+(px>r.width*.7?'-100%':px<r.width*.3?'0':'-50%')+',-115%)';tip.style.top=(y(p.p)*r.height/H)+'px';
+    tip.textContent=p.t+'  ¥'+p.p.toLocaleString()+(p.v?'  '+p.v:'');});
+  svg.addEventListener('mouseleave',function(){tip.style.display='none';xh.setAttribute('visibility','hidden')});
+})();
+</script>
 {% endblock %}

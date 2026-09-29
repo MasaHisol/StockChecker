@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS materials (
     owner_id INTEGER REFERENCES staff(id),
     preferred_supplier_id INTEGER REFERENCES suppliers(id),
     notes TEXT,
+    watch_urls TEXT,                 -- 価格を監視する商品ページ URL (改行区切り)
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
