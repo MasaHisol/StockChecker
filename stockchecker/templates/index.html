@@ -5,6 +5,8 @@
     <b>{{ rows|selectattr('needs_quote')|list|length }}</b> 件が見積取得必要 /
     全 {{ rows|length }} 件　·　下書きメール <a href="{{ url_for('emails') }}">{{ drafts }} 件</a>
     　·　自動送信: {% if settings.auto_send_enabled %}<span class="tag ok">有効</span>{% else %}<span class="tag w">無効</span>{% endif %}
+    <div class="muted" style="font-size:12px;margin-top:4px">ネット取得元:
+      {% for n, on in sources %}<span class="tag {{ 'ok' if on else '' }}" style="{{ '' if on else 'opacity:.5' }}">{{ n }}{{ '' if on else ' 未設定' }}</span> {% endfor %}</div>
   </div>
   <form method="post" action="{{ url_for('run_checks') }}" class="row">
     <label class="row" style="margin:0"><input type="checkbox" name="demo" value="1" style="width:auto"> デモ相場で価格取得</label>
@@ -15,7 +17,7 @@
 <div class="card scroll">
 <h2>部材一覧</h2>
 <table>
-<tr><th>品番 / 品名</th><th>担当</th><th class="num">数量</th><th>必要納期</th><th class="num">一般単価</th><th class="num">一般納期</th><th>情報日</th><th>判定</th></tr>
+<tr><th>品番 / 品名</th><th>担当</th><th class="num">数量</th><th>必要納期</th><th class="num">一般単価</th><th class="num">一般納期</th><th>情報日 / 出典</th><th>判定</th></tr>
 {% for r in rows %}{% set m = r.m %}
 <tr>
   <td><a href="{{ url_for('material_detail', mid=m.id) }}">{{ m.part_number }}</a><br><span class="muted">{{ m.name }}</span></td>
@@ -24,7 +26,8 @@
   <td>{{ m.required_date or '-' }}</td>
   <td class="num">{% if r.latest and r.latest.unit_price is not none %}{{ '{:,.2f}'.format(r.latest.unit_price).rstrip('0').rstrip('.') }} 円{% else %}-{% endif %}</td>
   <td class="num">{% if r.latest and r.latest.lead_time_days is not none %}{{ r.latest.lead_time_days }} 日{% else %}-{% endif %}</td>
-  <td class="muted">{{ r.latest.observed_at[:10] if r.latest else '-' }}</td>
+  <td class="muted">{{ r.latest.observed_at[:10] if r.latest else '-' }}
+    {% if r.latest and r.latest.vendor %}<br>{% if r.latest.url %}<a href="{{ r.latest.url }}" target="_blank" rel="noopener">{{ r.latest.vendor }}</a>{% else %}{{ r.latest.vendor }}{% endif %}{% endif %}</td>
   <td>{% if r.needs_quote %}<span class="tag q">要見積</span>{% elif r.findings %}<span class="tag w">注意</span>{% else %}<span class="tag ok">OK</span>{% endif %}
     {% for f in r.findings %}<div class="muted" style="font-size:12px">・{{ f.message }}</div>{% endfor %}</td>
 </tr>

@@ -24,7 +24,7 @@ port = 5000
 open_browser = 1
 ; 定期チェックの間隔 (時間)。0 で無効
 check_interval_hours = 24
-; 価格取得にデモ用の擬似相場を使う (1/0)
+; 価格取得にデモ用の擬似相場を使う (1/0)。[sources] 設定時は 0 のままにしてください
 demo_prices = 0
 
 [company]
@@ -39,6 +39,20 @@ port = 587
 user =
 password =
 starttls = 1
+
+[sources]
+; ネット上の一般価格・納期の自動取得。キーを入れた取得元だけが使われます
+; Mouser (電子部品): https://www.mouser.jp/api-hub/ で無料発行
+mouser_api_key =
+; Digi-Key (電子部品): https://developer.digikey.com/ でアプリ登録 (Production)
+digikey_client_id =
+digikey_client_secret =
+; Web 検索 (機構部品・鋼材・汎用品など何でも): https://console.anthropic.com/ で発行 (従量課金)
+anthropic_api_key =
+; off / fallback (API で見つからない部材のみ・推奨) / always
+web_search = fallback
+; 同じ部材を Web 検索する最短間隔 (日)。費用を抑えるため
+web_search_interval_days = 7
 
 [automation]
 ; 1 にすると「自動送信 ON」の仕入先へ見積依頼を承認なしで送信します
@@ -61,6 +75,12 @@ ENV_MAP = {
     ("smtp", "user"): "SC_SMTP_USER",
     ("smtp", "password"): "SC_SMTP_PASSWORD",
     ("smtp", "starttls"): "SC_SMTP_STARTTLS",
+    ("sources", "mouser_api_key"): "SC_MOUSER_API_KEY",
+    ("sources", "digikey_client_id"): "SC_DIGIKEY_CLIENT_ID",
+    ("sources", "digikey_client_secret"): "SC_DIGIKEY_CLIENT_SECRET",
+    ("sources", "anthropic_api_key"): "ANTHROPIC_API_KEY",
+    ("sources", "web_search"): "SC_WEB_SEARCH",
+    ("sources", "web_search_interval_days"): "SC_WEB_SEARCH_INTERVAL_DAYS",
     ("automation", "auto_send"): "SC_AUTO_SEND",
     ("automation", "price_feed_url"): "SC_PRICE_FEED_URL",
     ("rules", "stale_days"): "SC_STALE_DAYS",
@@ -73,6 +93,12 @@ ENV_MAP = {
 def load_config():
     if not INI.exists():
         INI.write_text(TEMPLATE, encoding="utf-8")
+    user = configparser.ConfigParser()
+    user.read(INI, encoding="utf-8")
+    if not user.has_section("sources"):  # 旧バージョンの ini に新しい設定欄を追記
+        block = TEMPLATE[TEMPLATE.index("\n[sources]") + 1:TEMPLATE.index("\n[automation]") + 1]
+        with INI.open("a", encoding="utf-8") as f:
+            f.write("\n" + block)
     cp = configparser.ConfigParser()
     cp.read_string(TEMPLATE)
     cp.read(INI, encoding="utf-8")

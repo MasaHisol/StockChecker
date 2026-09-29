@@ -1,3 +1,4 @@
 flask>=3.0
 waitress>=3.0
+anthropic>=1.9
 pytest>=8.0

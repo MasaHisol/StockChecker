@@ -43,6 +43,9 @@ CREATE TABLE IF NOT EXISTS price_observations (
     lead_time_days INTEGER,
     stock_qty INTEGER,
     min_order_qty INTEGER,
+    vendor TEXT,                      -- 採用した販売元 (Mouser / モノタロウ 等)
+    url TEXT,                         -- 商品ページ
+    detail TEXT,                      -- 取得した全オファー (JSON)
     observed_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 

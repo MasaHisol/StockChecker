@@ -32,6 +32,14 @@ class Settings:
     # 見積依頼メールの自動送信を全体で許可するか (仕入先ごとの設定と AND)
     auto_send_enabled: bool = False
     price_feed_url: str = ""   # HTTP 価格フィードの URL (任意)
+    # ネット自動取得
+    mouser_api_key: str = ""
+    digikey_client_id: str = ""
+    digikey_client_secret: str = ""
+    anthropic_api_key: str = ""
+    # Web 検索 (Claude): off / fallback (API で見つからない部材のみ) / always
+    web_search: str = "fallback"
+    web_search_interval_days: int = 7   # 同じ部材を Web 検索する最短間隔 (費用抑制)
     rules: Rules = field(default_factory=Rules)
 
     @classmethod
@@ -50,6 +58,12 @@ class Settings:
         s.outbox_dir = e("SC_OUTBOX_DIR", s.outbox_dir)
         s.auto_send_enabled = _env_bool("SC_AUTO_SEND", s.auto_send_enabled)
         s.price_feed_url = e("SC_PRICE_FEED_URL", s.price_feed_url)
+        s.mouser_api_key = e("SC_MOUSER_API_KEY", s.mouser_api_key)
+        s.digikey_client_id = e("SC_DIGIKEY_CLIENT_ID", s.digikey_client_id)
+        s.digikey_client_secret = e("SC_DIGIKEY_CLIENT_SECRET", s.digikey_client_secret)
+        s.anthropic_api_key = e("ANTHROPIC_API_KEY", s.anthropic_api_key)
+        s.web_search = e("SC_WEB_SEARCH", s.web_search).lower()
+        s.web_search_interval_days = int(e("SC_WEB_SEARCH_INTERVAL_DAYS", s.web_search_interval_days))
         r = s.rules
         r.stale_days = int(e("SC_STALE_DAYS", r.stale_days))
         r.price_change_pct = float(e("SC_PRICE_CHANGE_PCT", r.price_change_pct))

@@ -5,7 +5,7 @@ import urllib.request
 from collections import defaultdict
 from datetime import date
 
-from . import db, mailer, rules
+from . import db, mailer, online, rules
 
 log = logging.getLogger(__name__)
 
@@ -55,22 +55,60 @@ def create_order(conn, material, supplier, settings, quantity, unit_price, deliv
                        cc_addr=owner["email"] if owner else None)
 
 
-def refresh_prices(conn, providers, materials):
+def _web_recently_checked(conn, material_id, days):
+    return conn.execute(
+        "SELECT 1 FROM price_observations WHERE material_id=? AND source LIKE '%web%' "
+        "AND observed_at >= datetime('now','localtime', ?)",
+        (material_id, f"-{days} days")).fetchone() is not None
+
+
+def _collect(provider, material, errors):
+    try:
+        offers = provider.fetch(material)
+    except Exception as e:
+        log.warning("provider %s failed for %s: %s", provider.name, material["part_number"], e)
+        errors.append(f"{material['part_number']}: {provider.name}: {e}")
+        return []
+    for o in offers:
+        o.setdefault("source", provider.name)
+    return offers
+
+
+def refresh_prices(conn, providers, materials, settings=None, errors=None):
+    """各部材について全プロバイダからオファーを集め、代表値 1 件を記録する。
+
+    fallback_only なプロバイダ (Web 検索) は、他のプロバイダで価格が取れなかった部材
+    (settings.web_search == "always" なら全部材) にだけ、一定間隔おきに使う。
+    """
+    errors = [] if errors is None else errors
+    mode = settings.web_search if settings else "fallback"
+    interval = settings.web_search_interval_days if settings else 7
+    primary = [p for p in providers if not getattr(p, "fallback_only", False)]
+    fallback = [p for p in providers if getattr(p, "fallback_only", False)]
     count = 0
     for m in materials:
-        for p in providers:
-            try:
-                for obs in p.fetch(m):
-                    db.add_observation(
-                        conn, m["id"], p.name,
-                        unit_price=obs.get("unit_price"),
-                        lead_time_days=obs.get("lead_time_days"),
-                        stock_qty=obs.get("stock_qty"),
-                        min_order_qty=obs.get("min_order_qty"),
-                        currency=obs.get("currency", "JPY"))
-                    count += 1
-            except Exception:
-                log.exception("provider %s failed for %s", p.name, m["part_number"])
+        offers = []
+        for p in primary:
+            offers += _collect(p, m, errors)
+        has_price = any(o.get("unit_price") is not None for o in offers)
+        if fallback and mode != "off" and (mode == "always" or not has_price) \
+                and not _web_recently_checked(conn, m["id"], interval):
+            for p in fallback:
+                offers += _collect(p, m, errors)
+        best = online.pick_best(offers, m["quantity"] or 1)
+        if not best:
+            continue
+        sources = sorted({o["source"] for o in offers})
+        db.add_observation(
+            conn, m["id"], "+".join(sources),
+            unit_price=best.get("unit_price"),
+            lead_time_days=best.get("lead_time_days"),
+            stock_qty=best.get("stock_qty"),
+            min_order_qty=best.get("min_order_qty"),
+            currency=best.get("currency", "JPY"),
+            vendor=best.get("vendor"), url=best.get("url"),
+            detail=json.dumps(offers, ensure_ascii=False) if len(offers) > 1 or best.get("note") else None)
+        count += 1
     return count
 
 
@@ -92,9 +130,10 @@ def run_checks(conn, settings, providers=(), today=None, notify=True):
     today = today or date.today()
     materials = conn.execute("SELECT * FROM materials WHERE active = 1").fetchall()
     summary = {"materials": len(materials), "observations": 0, "new_alerts": 0,
-               "rfq_drafts": 0, "rfq_sent": 0, "notifications": 0}
+               "rfq_drafts": 0, "rfq_sent": 0, "notifications": 0, "errors": []}
     if providers:
-        summary["observations"] = refresh_prices(conn, providers, materials)
+        summary["observations"] = refresh_prices(conn, providers, materials, settings,
+                                                 summary["errors"])
 
     per_owner = defaultdict(list)
     for m in materials:

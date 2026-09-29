@@ -1,19 +1,40 @@
+import json
 from datetime import date
 
 from flask import Flask, abort, flash, g, redirect, render_template, request, url_for
 
-from . import db, service
+from . import db, online, service
 from .config import Settings
 from .providers import DemoProvider, HttpJsonProvider, parse_price_csv
 
 
 def build_providers(settings, demo=False):
+    """設定済みの取得元をすべて返す。キーが未設定のものは使わない。"""
     ps = []
     if settings.price_feed_url:
         ps.append(HttpJsonProvider(settings.price_feed_url))
+    if settings.mouser_api_key:
+        ps.append(online.MouserProvider(settings.mouser_api_key))
+    if settings.digikey_client_id and settings.digikey_client_secret:
+        ps.append(online.DigiKeyProvider(settings.digikey_client_id, settings.digikey_client_secret))
+    if settings.anthropic_api_key and settings.web_search != "off":
+        try:
+            web = online.WebSearchProvider(settings.anthropic_api_key)
+            web.fallback_only = True
+            ps.append(web)
+        except ImportError:
+            pass
     if demo:
         ps.append(DemoProvider())
     return ps
+
+
+def source_status(settings):
+    return [("Mouser API", bool(settings.mouser_api_key)),
+            ("Digi-Key API", bool(settings.digikey_client_id and settings.digikey_client_secret)),
+            (f"Web 検索 (Claude, {settings.web_search})",
+             bool(settings.anthropic_api_key) and settings.web_search != "off"),
+            ("価格フィード URL", bool(settings.price_feed_url))]
 
 
 def _int(v):
@@ -29,6 +50,7 @@ def create_app(settings=None):
     app = Flask(__name__)
     app.config["SECRET_KEY"] = "stockchecker-local"
     app.config["SC"] = settings
+    app.jinja_env.filters["fromjson"] = json.loads
 
     with db.connect(settings.database) as conn:
         db.init_db(conn)
@@ -52,7 +74,7 @@ def create_app(settings=None):
 
     @app.context_processor
     def _ctx():
-        return {"settings": settings}
+        return {"settings": settings, "sources": source_status(settings)}
 
     # ---- ダッシュボード --------------------------------------------------
     @app.route("/")
@@ -82,6 +104,8 @@ def create_app(settings=None):
         flash(f"チェック完了: 部材 {s['materials']} 件 / 価格取得 {s['observations']} 件 / "
               f"新規アラート {s['new_alerts']} 件 / 見積依頼下書き {s['rfq_drafts']} 件 "
               f"(自動送信 {s['rfq_sent']} 件) / 担当者通知 {s['notifications']} 件")
+        for err in s["errors"][:5]:
+            flash(f"取得エラー: {err}")
         return redirect(url_for("index"))
 
     # ---- 部材 ------------------------------------------------------------
@@ -163,6 +187,22 @@ def create_app(settings=None):
                            stock_qty=_int(f.get("stock_qty")),
                            min_order_qty=_int(f.get("min_order_qty")))
         flash("価格・納期情報を登録しました。")
+        return redirect(url_for("material_detail", mid=mid))
+
+    @app.post("/materials/<int:mid>/fetch")
+    def fetch_now(mid):
+        m = get_or_404("materials", mid)
+        ps = build_providers(settings)
+        for p in ps:
+            p.fallback_only = False  # 手動取得では Web 検索も含め全取得元を使う
+        if not ps:
+            flash("ネット取得元が未設定です (stockchecker.ini の [sources] を設定してください)。")
+            return redirect(url_for("material_detail", mid=mid))
+        errors = []
+        n = service.refresh_prices(conn(), ps, [m], None, errors)
+        flash("最新の価格・納期を取得しました。" if n else "価格情報が見つかりませんでした。")
+        for err in errors:
+            flash(f"取得エラー: {err}")
         return redirect(url_for("material_detail", mid=mid))
 
     @app.post("/materials/<int:mid>/rfq")

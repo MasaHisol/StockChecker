@@ -13,6 +13,10 @@ def connect(path):
 
 def init_db(conn):
     conn.executescript(SCHEMA.read_text(encoding="utf-8"))
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(price_observations)")}
+    for col in ("vendor", "url", "detail"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE price_observations ADD COLUMN {col} TEXT")
     conn.commit()
 
 
@@ -34,11 +38,11 @@ def previous_observation(conn, material_id, before_id):
 
 def add_observation(conn, material_id, source, unit_price=None, lead_time_days=None,
                     supplier_id=None, stock_qty=None, min_order_qty=None,
-                    currency="JPY", observed_at=None):
+                    currency="JPY", observed_at=None, vendor=None, url=None, detail=None):
     cols = ["material_id", "source", "unit_price", "lead_time_days", "supplier_id",
-            "stock_qty", "min_order_qty", "currency"]
+            "stock_qty", "min_order_qty", "currency", "vendor", "url", "detail"]
     vals = [material_id, source, unit_price, lead_time_days, supplier_id,
-            stock_qty, min_order_qty, currency]
+            stock_qty, min_order_qty, currency, vendor, url, detail]
     if observed_at:
         cols.append("observed_at")
         vals.append(observed_at)
