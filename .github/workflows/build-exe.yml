@@ -5,9 +5,16 @@ on:
     branches: ["**"]
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      urls:
+        description: "読み取りを確認する商品ページ URL (スペース区切り)"
+        required: false
 
 permissions:
   contents: write
+
+env:
+  CHECK_URLS: "https://jp.misumi-ec.com/vona2/detail/222000347909/?HissuCode=CP30-BA+2P+1-M+10A"
 
 jobs:
   build:
@@ -20,6 +27,9 @@ jobs:
       - run: pip install -r requirements.txt pyinstaller
       - run: python -m pytest -q
       - run: pyinstaller -y --clean StockChecker.spec
+      - name: Smoke test exe
+        shell: pwsh
+        run: ./scripts/smoke_exe.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: StockChecker-windows
@@ -29,3 +39,22 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/StockChecker.exe
+
+  url-check:
+    # 実サイトの商品ページを Windows + Edge で読めるかの確認 (失敗してもビルドは止めない)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Read product pages
+        shell: bash
+        run: python scripts/check_urls.py ${{ github.event.inputs.urls || env.CHECK_URLS }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: url-check
+          path: url-check/
