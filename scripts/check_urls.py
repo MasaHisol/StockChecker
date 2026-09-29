@@ -23,6 +23,21 @@ for i, url in enumerate(sys.argv[1:]):
         except Exception as e:
             diag[mode] = {"error": str(e)[:200]}
     print(json.dumps({"url": url, "diag": diag}, ensure_ascii=False, indent=1))
+    # 構造調査用の抜粋 (ログに出す)
+    try:
+        h = (out / f"page{i}-static.html").read_text(encoding="utf-8")
+    except OSError:
+        h = ""
+    R = pagereader.re
+    print("--- ld+json:", [s[:300] for s in R.findall(r'<script[^>]+ld\+json[^>]*>(.*?)</script>', h, R.S)][:3])
+    print("--- meta/itemprop price:", R.findall(r'<[^>]*(?:itemprop|property)=["\'][^"\']*price[^"\']*["\'][^>]*>', h)[:5])
+    for m in list(R.finditer(r"[¥￥]", pagereader.re.sub(r"<script.*?</script>", "", h, flags=R.S)))[:3]:
+        s = R.sub(r"<script.*?</script>", "", h, flags=R.S)
+        print("--- around ¥:", R.sub(r"\s+", " ", s[max(0, m.start() - 700):m.start() + 200]))
+    links = sorted(set(R.findall(r'href="(/p/\d+/\d+/)"', h)))[:2]
+    print("--- product links:", links)
+    for l in links:
+        sys.argv.append("https://www.monotaro.com" + l)
     try:
         info = pagereader.read(url)
         (out / f"page{i}.html").write_text(info.html or "", encoding="utf-8")
