@@ -31,7 +31,22 @@
 
 同じ部材・仕入先への見積依頼は、下書きが残っている間および送信後 `SC_STALE_DAYS` 日間は重複作成しません。
 
-## 使い方
+## exe で使う (Windows・Python 不要)
+
+1. `StockChecker.exe` を入手する
+   - GitHub の **Actions → Build Windows exe** の最新実行の「Artifacts」からダウンロード
+     (`v1.0` のようなタグを push すると Releases にも添付されます)
+   - または Windows 上で `build_exe.bat` をダブルクリックして `dist\StockChecker.exe` を生成
+2. 好きなフォルダ (例: `C:\StockChecker`) に置いてダブルクリック → ブラウザが自動で開きます
+3. 初回起動時に同じフォルダへ `stockchecker.ini` (設定) と `stockchecker.db` (データ) が作られます。
+   SMTP・会社名・自動送信・判定しきい値は `stockchecker.ini` を編集して再起動してください
+4. 起動中は `check_interval_hours` (既定 24 時間) ごとに定期チェックを自動実行します。
+   終了は黒いウィンドウを閉じるだけです
+
+> 初回は Windows SmartScreen の警告が出ることがあります (「詳細情報」→「実行」)。
+> データを残すにはフォルダごとバックアップしてください。
+
+## 使い方 (Python から)
 
 ```bash
 pip install -r requirements.txt

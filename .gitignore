@@ -3,3 +3,6 @@ __pycache__/
 outbox/
 .venv/
 .pytest_cache/
+build/
+dist/
+stockchecker.ini
