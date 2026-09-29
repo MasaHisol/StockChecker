@@ -33,6 +33,8 @@ LEAD_PATTERNS = [
     (re.compile(r"(\d+)\s*営業日"), 1.4),
     (re.compile(r"当日\s*(?:出荷|発送)"), None),
     (re.compile(r"翌日\s*(?:出荷|発送|お届け)"), None),
+    (re.compile(r"出荷日[^\d\n]{0,10}(\d+)\s*日目"), 1.0),
+    (re.compile(r"(\d+)\s*日目\s*(?:出荷|発送)"), 1.0),
     (re.compile(r"(\d+)\s*日[^\d\n]{0,6}(?:出荷|発送|お届け)"), 1.0),
     (re.compile(r"(\d+)\s*週間"), 7.0),
 ]
@@ -54,6 +56,7 @@ class PageInfo:
     tax_included: bool = None
     candidates: list = field(default_factory=list)   # 価格候補 [{value, label, context, tax}]
     rendered: bool = False
+    html: str = None                # 読み取った HTML (トラブル調査用)
 
 
 class FetchError(Exception):
@@ -77,8 +80,15 @@ def fetch_static(url, timeout=20):
     return raw.decode(charset, errors="replace")
 
 
-def fetch_rendered(url, timeout_ms=30000):
-    """PC にある Edge / Chrome (無ければ Playwright の Chromium) で表示した HTML を返す。"""
+PRICE_JS = r"""() => /[¥￥]\s?[0-9]|[0-9,]+\s?円/.test(document.body ? document.body.innerText : "")"""
+
+
+def fetch_rendered(url, timeout_ms=30000, headless=True):
+    """PC にある Edge / Chrome (無ければ Playwright の Chromium) で表示した HTML を返す。
+
+    headless=False のときは画面外にウィンドウを出して通常のブラウザとして開く
+    (自動アクセス対策で画面なしブラウザを拒否するサイト向け)。
+    """
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as e:
@@ -86,24 +96,37 @@ def fetch_rendered(url, timeout_ms=30000):
     import os
     last = None
     exe = os.environ.get("SC_BROWSER_PATH")  # 任意: 使うブラウザの実行ファイルを明示
+    args = ["--disable-blink-features=AutomationControlled"]
+    if not headless:
+        args += ["--window-position=-32000,-32000", "--window-size=1280,900"]
     with sync_playwright() as p:
         for channel in (["exe"] if exe else []) + ["msedge", "chrome", None]:
+            opts = {"headless": headless, "args": args}
             try:
                 if channel == "exe":
-                    b = p.chromium.launch(executable_path=exe, headless=True)
+                    b = p.chromium.launch(executable_path=exe, **opts)
                 elif channel:
-                    b = p.chromium.launch(channel=channel, headless=True)
+                    b = p.chromium.launch(channel=channel, **opts)
                 else:
-                    b = p.chromium.launch(headless=True)
+                    b = p.chromium.launch(**opts)
             except Exception as e:
                 last = e
                 continue
             try:
-                ctx = b.new_context(locale="ja-JP", user_agent=HEADERS["User-Agent"])
+                ctx_opts = {"locale": "ja-JP", "viewport": {"width": 1280, "height": 900}}
+                if headless:  # 画面なしブラウザの識別文字列を通常のものに置き換える
+                    ctx_opts["user_agent"] = HEADERS["User-Agent"]
+                ctx = b.new_context(**ctx_opts)
+                ctx.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
                 page = ctx.new_page()
                 page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
                 try:
                     page.wait_for_load_state("networkidle", timeout=10000)
+                except Exception:
+                    pass
+                try:  # 価格が後から読み込まれるページは金額が表示されるまで待つ
+                    page.wait_for_function(PRICE_JS, timeout=15000)
+                    page.wait_for_timeout(1500)
                 except Exception:
                     pass
                 return page.content()
@@ -187,6 +210,31 @@ def _price_after_label(text, label):
     return None, None
 
 
+def _cells(row_html):
+    return [re.sub(r"\s+", " ", htmlmod.unescape(re.sub(r"<[^>]+>", " ", c))).strip()
+            for c in re.findall(r"<t[hd][^>]*>(.*?)</t[hd]>", row_html, re.S | re.I)]
+
+
+def table_prices(html):
+    """表形式の価格 (見出し行の「単価」列の値) を探す。[(金額, 見出し)]"""
+    out = []
+    html = re.sub(r"<(script|style|template|noscript)[^>]*>.*?</\1>", " ", html, flags=re.S | re.I)
+    for table in re.findall(r"<table[^>]*>(.*?)</table>", html, re.S | re.I):
+        rows = [_cells(r) for r in re.findall(r"<tr[^>]*>(.*?)</tr>", table, re.S | re.I)]
+        rows = [r for r in rows if r]
+        for hi, head in enumerate(rows[:-1]):
+            for ci, h in enumerate(head):
+                if GOOD_LABEL.search(h) and not BAD_LABEL.search(h) and len(h) <= 20:
+                    for row in rows[hi + 1:hi + 2]:
+                        if ci < len(row):
+                            m = PRICE_RE.search(row[ci]) or re.fullmatch(r"([\d,]+(?:\.\d+)?)", row[ci])
+                            if m:
+                                v = _to_number(m.group(0))
+                                if v:
+                                    out.append((v, h))
+    return out
+
+
 EMBED_KEYS = r"(?:price|salePrice|salesPrice|sellingPrice|unitPrice|standardUnitPrice|priceExcludingTax|itemPrice)"
 
 
@@ -223,6 +271,12 @@ def parse(html, url="", hint=None):
             re.search(r'property=["\'](?:product|og):price:amount["\'][^>]*content=["\']([^"\']+)', html)
         if m and _to_number(m.group(1)):
             info.unit_price, info.method = _to_number(m.group(1)), "商品データ (meta)"
+    if url and not info.part_number:
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+        for key in ("HissuCode", "hissuCode", "partNumber", "pn", "model"):
+            if q.get(key):
+                info.part_number = q[key][0].strip()
+                break
     if not info.title:
         m = re.search(r'property=["\']og:title["\'][^>]*content=["\']([^"\']+)', html) or \
             re.search(r"<title[^>]*>(.*?)</title>", html, re.S | re.I)
@@ -234,9 +288,20 @@ def parse(html, url="", hint=None):
     # 3. 記憶した見出し
     if hint and hint.get("label"):
         v, tax = _price_after_label(text, hint["label"])
+        if not v:
+            v = next((tv for tv, th in table_prices(html) if th == hint["label"]), None)
         if v:
             info.unit_price, info.method = v, f"記憶した見出し「{hint['label']}」"
             info.tax_included = (hint.get("tax") == "incl") if hint.get("tax") else tax == "incl"
+    # 表の「単価」列
+    if info.unit_price is None:
+        tp = table_prices(html)
+        if tp:
+            v, h = tp[0]
+            info.unit_price, info.method = v, f"表の「{h}」列"
+            info.tax_included = _tax_of(h) == "incl"
+            if not any(c["value"] == v for c in info.candidates):
+                info.candidates.insert(0, {"value": v, "label": h, "context": f"{h} ¥{v:,.0f}", "tax": _tax_of(h)})
     # 2. 埋め込み JSON
     if info.unit_price is None:
         m = re.search(r'"' + EMBED_KEYS + r'"\s*:\s*"?([\d.,]+)', html)
@@ -271,25 +336,34 @@ def read(url, hint=None, allow_render=True):
     """URL を読み取り PageInfo を返す。価格が見つからなければブラウザ表示で再挑戦する。"""
     if not re.match(r"https?://", url or ""):
         raise FetchError("URL は http:// または https:// で始まる必要があります")
-    err = None
+    err, best = None, None
     try:
-        info = parse(fetch_static(url), url, hint)
-        if info.unit_price is not None:
-            return info
+        html = fetch_static(url)
+        best = parse(html, url, hint)
+        best.html = html
+        if best.unit_price is not None:
+            return best
     except FetchError as e:
-        err, info = e, None
-    if allow_render:
+        err = e
+    if not allow_render:
+        if best is None:
+            raise err
+        return best
+    for headless in (True, False):
         try:
-            r = parse(fetch_rendered(url), url, hint)
-            r.rendered = True
-            if r.unit_price is not None or info is None or len(r.candidates) > len(info.candidates):
-                return r
+            html = fetch_rendered(url, headless=headless)
         except FetchError as e:
-            if info is None:
-                raise FetchError(f"{err}。ブラウザでの表示も失敗しました: {e}") from e
-    if info is None:
-        raise err
-    return info
+            err = err or e
+            continue
+        r = parse(html, url, hint)
+        r.rendered, r.html = True, html
+        if best is None or r.unit_price is not None or len(r.candidates) > len(best.candidates):
+            best = r
+        if r.unit_price is not None or r.candidates:
+            break
+    if best is None:
+        raise FetchError(f"{err}。ブラウザでの表示も失敗しました")
+    return best
 
 
 def net_price(info):

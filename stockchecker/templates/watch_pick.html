@@ -39,6 +39,7 @@
 {% endif %}
 </form>
 
+{% if debug_path and not info.candidates %}<div class="flash err">読み取った内容を保存しました: {{ debug_path }}<br>このファイルを開発者に送ると、このサイト向けに読み取りを調整できます。</div>{% endif %}
 <form method="post" action="{{ url_for('watch_pick', mid=m.id) }}" class="card">
   <input type="hidden" name="url" value="{{ url }}">
   <h2>一覧にない場合: 価格を手入力して URL を登録</h2>

@@ -32,3 +32,11 @@ def test_bad_url():
     import pytest
     with pytest.raises(r.FetchError):
         r.read("ftp://x")
+
+
+def test_table_column_price_and_misumi_url():
+    h = ("<table><tr><th>型番</th><th>通常単価(税別)</th><th>出荷日</th></tr>"
+         "<tr><td>CP30-BA 2P 1-M 10A</td><td>¥ 6,480</td><td>通常出荷日 4日目</td></tr></table>")
+    i = r.parse(h, "https://jp.misumi-ec.com/vona2/detail/1/?HissuCode=CP30-BA+2P+1-M+10A")
+    assert i.unit_price == 6480 and i.lead_time_days == 4
+    assert i.part_number == "CP30-BA 2P 1-M 10A" and not i.tax_included

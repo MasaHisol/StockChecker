@@ -287,6 +287,18 @@ def create_app(settings=None):
                            detail=json.dumps([offer], ensure_ascii=False))
         return offer
 
+    def _save_debug(info):
+        """読み取れなかったページの HTML を保存し、パスを返す (問い合わせ用)。"""
+        if not info or not getattr(info, "html", None):
+            return None
+        from datetime import datetime
+        from pathlib import Path
+        d = Path(settings.database).resolve().parent / "debug"
+        d.mkdir(exist_ok=True)
+        path = d / f"{pagereader.domain(info.url).replace(':', '_')}-{datetime.now():%Y%m%d-%H%M%S}.html"
+        path.write_text(info.html, encoding="utf-8")
+        return str(path)
+
     def _hint_for(url):
         r = conn().execute("SELECT * FROM site_hints WHERE domain=?",
                            (pagereader.domain(url),)).fetchone()
@@ -302,7 +314,8 @@ def create_app(settings=None):
             flash(f"ページを開けませんでした: {e}", "error")
             return redirect(url_for("material_detail", mid=mid))
         if info.unit_price is None:
-            return render_template("watch_pick.html", m=m, info=info, url=url)
+            return render_template("watch_pick.html", m=m, info=info, url=url,
+                                   debug_path=_save_debug(info))
         _add_watch_url(mid, url)
         o = _record_page(m, info, info.method)
         flash(f"追跡を開始しました: 単価 ¥{o['unit_price']:,.0f}"
@@ -454,7 +467,8 @@ def create_app(settings=None):
                 flash(f"価格を自動判定できませんでしたが、ページ内に金額が {len(i.candidates)} 件あります。"
                       "部材画面で URL を貼り付けると、どれが価格かを選んで追跡できます。", "error")
             else:
-                flash("ページ内に金額が見つかりませんでした (ログインが必要なページの可能性があります)。", "error")
+                flash("ページ内に金額が見つかりませんでした (ログインが必要なページの可能性があります)。"
+                      f" 調査用に読み取った内容を保存しました: {_save_debug(i)}", "error")
         except pagereader.FetchError as e:
             flash(f"ページを開けませんでした: {e}", "error")
         return redirect(url_for("sources_page", test_url=url))
