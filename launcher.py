@@ -145,6 +145,11 @@ def scheduler(settings, hours, demo):
 
 
 def main():
+    for stream in (sys.stdout, sys.stderr):  # 文字コードの合わないコンソールでも落ちないように
+        try:
+            stream.reconfigure(errors="replace")
+        except Exception:
+            pass
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     cp = load_config()
     from stockchecker import create_app

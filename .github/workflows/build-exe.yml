@@ -14,7 +14,10 @@ permissions:
   contents: write
 
 env:
-  CHECK_URLS: "https://jp.misumi-ec.com/vona2/detail/222000347909/?HissuCode=CP30-BA+2P+1-M+10A"
+  CHECK_URLS: >-
+    https://jp.misumi-ec.com/vona2/detail/222000347909/?HissuCode=CP30-BA+2P+1-M+10A
+    https://jp.misumi-ec.com/vona2/detail/222000347909/
+    https://www.monotaro.com/g/00017364/
 
 jobs:
   build:
@@ -52,6 +55,8 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Read product pages
         shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
         run: python scripts/check_urls.py ${{ github.event.inputs.urls || env.CHECK_URLS }}
       - uses: actions/upload-artifact@v4
         if: always()
