@@ -9,7 +9,11 @@ from stockchecker import pagereader  # noqa: E402
 out = pathlib.Path("url-check")
 out.mkdir(exist_ok=True)
 results = []
-for i, url in enumerate(sys.argv[1:]):
+queue = list(sys.argv[1:])
+i = -1
+while i + 1 < len(queue):
+    i += 1
+    url = queue[i]
     # 切り分け用: 静的取得と画面なし/画面ありブラウザそれぞれのページタイトル
     diag = {}
     for mode in ("static", "headless", "headed"):
@@ -37,7 +41,7 @@ for i, url in enumerate(sys.argv[1:]):
     links = sorted(set(R.findall(r'href="(/p/\d+/\d+/)"', h)))[:2]
     print("--- product links:", links)
     for l in links:
-        sys.argv.append("https://www.monotaro.com" + l)
+        queue.append("https://www.monotaro.com" + l)
     try:
         info = pagereader.read(url)
         (out / f"page{i}.html").write_text(info.html or "", encoding="utf-8")
