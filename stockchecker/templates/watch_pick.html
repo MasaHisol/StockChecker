@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head"><div>
+  <div class="sub"><a href="{{ url_for('material_detail', mid=m.id) }}">{{ m.name }}</a> / 価格の場所を指定</div>
+  <h1>どれがこの商品の価格ですか？</h1>
+  <div class="sub" style="word-break:break-all">{{ info.title or '' }} — <a href="{{ url }}" target="_blank" rel="noopener">{{ url }}</a></div>
+</div></div>
+
+<form method="post" action="{{ url_for('watch_pick', mid=m.id) }}">
+<input type="hidden" name="url" value="{{ url }}">
+<div class="card flush">
+  <h2>ページ内で見つかった金額 <span class="muted small">{{ info.candidates|length }} 件{% if info.rendered %}・ブラウザで表示して取得{% endif %}</span></h2>
+  {% if info.candidates %}
+  <div class="scroll"><table>
+    <thead><tr><th></th><th class="num">金額</th><th>前後の表示</th><th>税</th></tr></thead>
+    <tbody>
+    {% set guessed = false %}{% set guess = info.unit_price if info.unit_price is not none and info.candidates|selectattr('value','equalto',info.unit_price)|list else info.candidates[0].value %}
+    {% for c in info.candidates %}
+    <tr onclick="this.querySelector('input').checked=true;setTax('{{ c.tax or '' }}')" style="cursor:pointer">
+      <td><input type="radio" name="choice" value='{{ c|tojson }}' style="width:auto" {{ 'checked' if c.value == guess and not guessed }} required></td>
+      <td class="num"><b>¥{{ c.value|yen }}</b></td>
+      <td class="small">{{ c.context }}</td>
+      <td>{% if c.tax == 'incl' %}<span class="pill warn">税込</span>{% elif c.tax == 'excl' %}<span class="pill good">税抜</span>{% else %}<span class="muted small">—</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+    </tbody></table></div>
+  {% else %}
+  <div class="empty">ページ内に金額が見つかりませんでした。ログインが必要なページか、画像で価格を表示しているページの可能性があります。下で価格を手入力してください。</div>
+  {% endif %}
+  <div style="padding:14px 18px;border-top:1px solid var(--line-2)" class="row">
+    <label class="row" style="font-weight:500"><input type="radio" name="tax" value="excl" id="tx" style="width:auto" checked> 税抜の金額</label>
+    <label class="row" style="font-weight:500"><input type="radio" name="tax" value="incl" id="ti" style="width:auto"> 税込の金額 (税抜に換算して記録)</label>
+    <div style="margin-left:auto" class="row"><label class="small muted">納期 (日・任意)</label><input name="lead_time_days" type="number" value="{{ info.lead_time_days if info.lead_time_days is not none else '' }}" style="width:90px"></div>
+  </div>
+</div>
+{% if info.candidates %}
+<div class="row" style="margin-bottom:18px"><button>この金額で追跡する</button>
+  <span class="hint">選んだ金額の見出し (例:「通常単価(税別)」) をサイトごとに記憶し、次回から自動で読み取ります。</span></div>
+{% endif %}
+</form>
+
+<form method="post" action="{{ url_for('watch_pick', mid=m.id) }}" class="card">
+  <input type="hidden" name="url" value="{{ url }}">
+  <h2>一覧にない場合: 価格を手入力して URL を登録</h2>
+  <div class="row"><input name="manual_price" placeholder="単価 (円)" required style="max-width:160px">
+    <select name="manual_tax" style="max-width:120px"><option value="excl">税抜</option><option value="incl">税込</option></select>
+    <input name="lead_time_days" type="number" placeholder="納期 (日)" style="max-width:120px"><button class="ghost">登録する</button></div>
+  <div class="hint">URL は監視ページとして登録されます。次回以降も自動で読めない場合は、エラーとして通知されます。</div>
+</form>
+<script>function setTax(t){if(t)document.getElementById(t==='incl'?'ti':'tx').checked=true}
+(function(){var f=document.querySelector('input[name=choice]:checked');if(f)f.closest('tr').onclick();})();</script>
+{% endblock %}

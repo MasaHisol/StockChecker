@@ -12,6 +12,7 @@ import urllib.parse
 import urllib.request
 
 from .online import _http_json, _pn_match, _to_number
+from . import pagereader
 from .providers import PriceProvider
 
 UA = "Mozilla/5.0 (StockChecker price watcher)"
@@ -27,94 +28,54 @@ def name_contains_pn(name, pn):
 
 
 # ------------------------------------------------------------ ページ監視
-LEAD_PATTERNS = [
-    (re.compile(r"(\d+)\s*[~〜～-]\s*(\d+)\s*営業日"), 1.4),
-    (re.compile(r"(\d+)\s*営業日"), 1.4),
-    (re.compile(r"(\d+)\s*日[^\d]{0,6}(?:出荷|発送|お届け)"), 1.0),
-    (re.compile(r"(\d+)\s*週間"), 7.0),
-]
-
-
-def _iter_jsonld(text):
-    for m in re.finditer(r'<script[^>]+application/ld\+json[^>]*>(.*?)</script>', text, re.S | re.I):
-        try:
-            data = json.loads(html.unescape(m.group(1).strip()))
-        except ValueError:
-            continue
-        stack = [data]
-        while stack:
-            d = stack.pop()
-            if isinstance(d, list):
-                stack.extend(d)
-            elif isinstance(d, dict):
-                yield d
-                stack.extend(v for v in d.values() if isinstance(v, (dict, list)))
-
-
 def parse_product_page(text):
-    """HTML から価格・在庫・納期を抽出する。見つからない項目は None。"""
-    out = {"unit_price": None, "stock_qty": None, "lead_time_days": None, "in_stock": None}
-    for d in _iter_jsonld(text):
-        t = d.get("@type")
-        if (t == "Offer" or t == "AggregateOffer" or (isinstance(t, list) and "Offer" in t)) \
-                and out["unit_price"] is None:
-            out["unit_price"] = _to_number(d.get("price") or d.get("lowPrice"))
-            avail = str(d.get("availability") or "")
-            if avail:
-                out["in_stock"] = "InStock" in avail
-            inv = d.get("inventoryLevel")
-            if isinstance(inv, dict):
-                out["stock_qty"] = _to_number(inv.get("value"))
-            ship = d.get("deliveryLeadTime") or (d.get("shippingDetails") or {}).get("deliveryTime")
-            if isinstance(ship, dict):
-                v = ship.get("maxValue") or ship.get("value") or \
-                    (ship.get("handlingTime") or {}).get("maxValue")
-                if v is not None:
-                    out["lead_time_days"] = int(_to_number(v))
-    if out["unit_price"] is None:
-        m = re.search(r'itemprop=["\']price["\'][^>]*content=["\']([^"\']+)', text) or \
-            re.search(r'property=["\'](?:product|og):price:amount["\'][^>]*content=["\']([^"\']+)', text)
-        if m:
-            out["unit_price"] = _to_number(m.group(1))
-    if out["lead_time_days"] is None:
-        plain = re.sub(r"<[^>]+>", " ", text)
-        for pat, mult in LEAD_PATTERNS:
-            m = pat.search(plain)
-            if m:
-                out["lead_time_days"] = round(int(m.groups()[-1]) * mult)
-                break
-    if out["stock_qty"] is not None:
-        out["stock_qty"] = int(out["stock_qty"])
-    return out
+    """互換用: HTML から価格等を抽出する。"""
+    i = pagereader.parse(text)
+    return {"unit_price": i.unit_price, "stock_qty": i.stock_qty,
+            "lead_time_days": i.lead_time_days, "in_stock": i.in_stock}
+
+
+def load_hints(db_path):
+    if not db_path:
+        return {}
+    from . import db
+    conn = db.connect(db_path)
+    try:
+        return {r["domain"]: dict(r) for r in conn.execute("SELECT * FROM site_hints")}
+    finally:
+        conn.close()
+
+
+def info_to_offer(info, quantity):
+    stock = info.stock_qty
+    if stock is None and info.in_stock:
+        stock = quantity  # 「在庫あり」表示のみ → 必要数ありとみなす
+    elif stock is None and info.in_stock is False:
+        stock = 0
+    return {"unit_price": pagereader.net_price(info), "stock_qty": stock,
+            "lead_time_days": info.lead_time_days, "currency": "JPY",
+            "vendor": pagereader.domain(info.url), "url": info.url,
+            "note": info.method}
 
 
 class PageWatchProvider(PriceProvider):
     name = "page"
 
-    def __init__(self, timeout=20):
-        self.timeout = timeout
+    def __init__(self, db_path=None, allow_render=True):
+        self.db_path = db_path
+        self.allow_render = allow_render
 
     def fetch(self, material):
         urls = [u.strip() for u in (material["watch_urls"] or "").splitlines() if u.strip()]
+        if not urls:
+            return []
+        hints = load_hints(self.db_path)
         offers = []
         for url in urls:
-            req = urllib.request.Request(url, headers={"User-Agent": UA,
-                                                       "Accept-Language": "ja,en;q=0.8"})
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                charset = r.headers.get_content_charset() or "utf-8"
-                text = r.read().decode(charset, errors="replace")
-            info = parse_product_page(text)
-            if info["unit_price"] is None and info["lead_time_days"] is None:
-                raise ValueError(f"価格を読み取れませんでした: {url}")
-            qty = material["quantity"] or 1
-            stock = info["stock_qty"]
-            if stock is None and info["in_stock"]:
-                stock = qty  # 「在庫あり」表示のみ → 必要数ありとみなす
-            elif stock is None and info["in_stock"] is False:
-                stock = 0
-            offers.append({"unit_price": info["unit_price"], "stock_qty": stock,
-                           "lead_time_days": info["lead_time_days"], "currency": "JPY",
-                           "vendor": urllib.parse.urlparse(url).netloc, "url": url})
+            info = pagereader.read(url, hints.get(pagereader.domain(url)), self.allow_render)
+            if info.unit_price is None and info.lead_time_days is None:
+                raise ValueError(f"価格を読み取れませんでした: {url} (部材画面の「URL を貼り付けて追跡」で価格の場所を指定してください)")
+            offers.append(info_to_offer(info, material["quantity"] or 1))
         return offers
 
 

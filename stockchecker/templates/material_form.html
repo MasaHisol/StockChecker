@@ -3,6 +3,13 @@
 <div class="page-head"><div>
   <div class="sub"><a href="{{ url_for('index') }}">ダッシュボード</a> / {{ '部材の編集' if m.id else '部材の登録' }}</div>
   <h1>{{ '部材の編集' if m.id else '部材の登録' }}</h1></div></div>
+{% if not m.id %}
+<form method="get" class="card" style="border-left:4px solid var(--accent)">
+  <h2>商品ページの URL から入力 (おすすめ)</h2>
+  <div class="row"><input name="url" type="url" placeholder="通販サイトの商品ページ URL を貼り付け" value="{{ m.watch_urls or '' }}" style="flex:1;min-width:240px"><button onclick="this.textContent='読み取り中…'">読み取る</button></div>
+  <div class="hint">品名・品番・メーカー・価格・納期をページから読み取って下のフォームに入れ、そのページを自動追跡の対象にします。</div>
+</form>
+{% endif %}
 <form method="post">
 <div class="card">
   <h2>基本情報</h2>
@@ -40,8 +47,8 @@
   <div class="hint">通販サイトの商品ページを登録すると、定期チェックのたびに価格・納期を読み取ります (無料・キー不要)。</div>
   {% if not m.id %}
   <div class="form-grid">
-    <div><label class="f">いま分かっている一般単価 (円)</label><input name="init_price"></div>
-    <div><label class="f">いま分かっている一般納期 (日)</label><input name="init_lead_time" type="number"></div>
+    <div><label class="f">いま分かっている一般単価 (円・税抜)</label><input name="init_price" value="{{ m.init_price if m.init_price is not none else '' }}"></div>
+    <div><label class="f">いま分かっている一般納期 (日)</label><input name="init_lead_time" type="number" value="{{ m.init_lead_time if m.init_lead_time is not none else '' }}"></div>
   </div>{% endif %}
   <label class="f">備考</label><input name="notes" value="{{ m.notes or '' }}">
 </div>

@@ -3,7 +3,7 @@ from datetime import date
 
 from flask import Flask, abort, flash, g, redirect, render_template, request, url_for
 
-from . import db, free_sources, online, service
+from . import db, free_sources, online, pagereader, service
 from .config import Settings
 from .providers import DemoProvider, HttpJsonProvider, parse_price_csv
 
@@ -14,7 +14,7 @@ def build_providers(settings, demo=False):
     if settings.price_feed_url:
         ps.append(HttpJsonProvider(settings.price_feed_url))
     if settings.page_watch:
-        ps.append(free_sources.PageWatchProvider())
+        ps.append(free_sources.PageWatchProvider(settings.database))
     if settings.yahoo_app_id:
         ps.append(free_sources.YahooShoppingProvider(settings.yahoo_app_id))
     if settings.rakuten_app_id:
@@ -183,11 +183,29 @@ def create_app(settings=None):
                 flash(f"登録できませんでした: {e}")
                 return render_template("material_form.html", m=request.form, **masters())
             price = _float(request.form.get("init_price"))
+            wurl = (request.form.get("watch_urls") or "").strip().splitlines()
             lt = _int(request.form.get("init_lead_time"))
             if price is not None or lt is not None:
-                db.add_observation(conn(), cur.lastrowid, "manual", price, lt)
+                src = "page" if wurl else "manual"
+                db.add_observation(conn(), cur.lastrowid, src, price, lt,
+                                   vendor=pagereader.domain(wurl[0]) if wurl else None,
+                                   url=wurl[0].strip() if wurl else None)
             return redirect(url_for("material_detail", mid=cur.lastrowid))
-        return render_template("material_form.html", m={}, **masters())
+        prefill = {}
+        url = request.args.get("url", "").strip()
+        if url:
+            try:
+                info = pagereader.read(url, _hint_for(url))
+                prefill = {"name": info.title, "part_number": info.part_number, "maker": info.maker,
+                           "watch_urls": url, "init_price": pagereader.net_price(info),
+                           "init_lead_time": info.lead_time_days}
+                flash("商品ページから入力しました。品番・品名を確認して保存してください。"
+                      + ("" if info.unit_price is not None else
+                         " 価格は自動で読み取れなかったため、保存後に部材画面で価格の場所を指定してください。"))
+            except pagereader.FetchError as e:
+                flash(f"ページを開けませんでした: {e}", "error")
+                prefill = {"watch_urls": url}
+        return render_template("material_form.html", m=prefill, **masters())
 
     @app.route("/materials/<int:mid>/edit", methods=["GET", "POST"])
     def material_edit(mid):
@@ -250,6 +268,88 @@ def create_app(settings=None):
         flash("最新の価格・納期を取得しました。" if n else "価格情報が見つかりませんでした。")
         for err in errors:
             flash(f"取得エラー: {err}", "error")
+        return redirect(url_for("material_detail", mid=mid))
+
+    def _add_watch_url(mid, url):
+        m = get_or_404("materials", mid)
+        urls = [u.strip() for u in (m["watch_urls"] or "").splitlines() if u.strip()]
+        if url not in urls:
+            urls.append(url)
+        conn().execute("UPDATE materials SET watch_urls=? WHERE id=?", ("\n".join(urls), mid))
+        conn().commit()
+
+    def _record_page(m, info, method):
+        offer = free_sources.info_to_offer(info, m["quantity"] or 1)
+        offer["note"] = method
+        db.add_observation(conn(), m["id"], "page", unit_price=offer["unit_price"],
+                           lead_time_days=offer["lead_time_days"], stock_qty=offer["stock_qty"],
+                           vendor=offer["vendor"], url=offer["url"],
+                           detail=json.dumps([offer], ensure_ascii=False))
+        return offer
+
+    def _hint_for(url):
+        r = conn().execute("SELECT * FROM site_hints WHERE domain=?",
+                           (pagereader.domain(url),)).fetchone()
+        return dict(r) if r else None
+
+    @app.post("/materials/<int:mid>/watch")
+    def watch_url(mid):
+        m = get_or_404("materials", mid)
+        url = request.form.get("url", "").strip()
+        try:
+            info = pagereader.read(url, _hint_for(url))
+        except pagereader.FetchError as e:
+            flash(f"ページを開けませんでした: {e}", "error")
+            return redirect(url_for("material_detail", mid=mid))
+        if info.unit_price is None:
+            return render_template("watch_pick.html", m=m, info=info, url=url)
+        _add_watch_url(mid, url)
+        o = _record_page(m, info, info.method)
+        flash(f"追跡を開始しました: 単価 ¥{o['unit_price']:,.0f}"
+              f"{' (税込から換算)' if info.tax_included else ''} / 読み取り方法: {info.method}。"
+              "違う金額の場合は「価格の場所を指定し直す」を押してください。")
+        return redirect(url_for("material_detail", mid=mid, repick=url))
+
+    @app.route("/materials/<int:mid>/watch/pick", methods=["GET", "POST"])
+    def watch_pick(mid):
+        m = get_or_404("materials", mid)
+        if request.method == "GET":  # 指定し直し
+            url = request.args.get("url", "")
+            try:
+                info = pagereader.read(url)
+            except pagereader.FetchError as e:
+                flash(f"ページを開けませんでした: {e}", "error")
+                return redirect(url_for("material_detail", mid=mid))
+            return render_template("watch_pick.html", m=m, info=info, url=url)
+        f = request.form
+        url = f["url"]
+        manual = _float(f.get("manual_price"))
+        info = pagereader.PageInfo(url=url, lead_time_days=_int(f.get("lead_time_days")))
+        if manual is not None:
+            info.unit_price, info.tax_included = manual, f.get("manual_tax") == "incl"
+            method = "手入力"
+        else:
+            c = json.loads(f["choice"])
+            info.unit_price, info.tax_included = c["value"], f.get("tax") == "incl"
+            if c.get("label"):
+                conn().execute("INSERT OR REPLACE INTO site_hints (domain, label, tax) VALUES (?,?,?)",
+                               (pagereader.domain(url), c["label"], f.get("tax") or None))
+                conn().commit()
+            method = f"見出し「{c.get('label') or '—'}」"
+        _add_watch_url(mid, url)
+        o = _record_page(m, info, method)
+        flash(f"追跡を開始しました: 単価 ¥{o['unit_price']:,.0f}。"
+              + ("次回からこのサイトは同じ見出しの金額を自動で読み取ります。" if manual is None else ""))
+        return redirect(url_for("material_detail", mid=mid))
+
+    @app.post("/materials/<int:mid>/watch/remove")
+    def watch_remove(mid):
+        m = get_or_404("materials", mid)
+        url = request.form.get("url", "")
+        urls = [u.strip() for u in (m["watch_urls"] or "").splitlines() if u.strip() and u.strip() != url]
+        conn().execute("UPDATE materials SET watch_urls=? WHERE id=?", ("\n".join(urls) or None, mid))
+        conn().commit()
+        flash("監視ページを外しました。")
         return redirect(url_for("material_detail", mid=mid))
 
     @app.post("/materials/<int:mid>/rfq")
@@ -344,15 +444,19 @@ def create_app(settings=None):
     @app.post("/sources/test")
     def sources_test():
         url = request.form.get("url", "").strip()
-        m = {"part_number": "", "quantity": 1, "watch_urls": url}
         try:
-            o = free_sources.PageWatchProvider().fetch(m)[0]
-            flash(f"読み取り成功: 単価 {o['unit_price'] if o['unit_price'] is not None else '不明'} 円 / "
-                  f"納期 {o['lead_time_days'] if o['lead_time_days'] is not None else '不明'} 日 / "
-                  f"在庫 {'あり' if o['stock_qty'] else ('なし' if o['stock_qty'] == 0 else '不明')} — "
-                  "このサイトはページ監視で自動追跡できます。")
-        except Exception as e:
-            flash(f"読み取れませんでした ({e})。このサイトはページ監視に対応していない可能性があります。", "error")
+            i = pagereader.read(url, _hint_for(url))
+            if i.unit_price is not None:
+                flash(f"読み取り成功: 単価 ¥{i.unit_price:,.0f} ({i.method}{' / ブラウザ表示' if i.rendered else ''}) / "
+                      f"納期 {i.lead_time_days if i.lead_time_days is not None else '不明'} 日 / "
+                      f"在庫 {'あり' if i.in_stock else ('なし' if i.in_stock is False else '不明')}")
+            elif i.candidates:
+                flash(f"価格を自動判定できませんでしたが、ページ内に金額が {len(i.candidates)} 件あります。"
+                      "部材画面で URL を貼り付けると、どれが価格かを選んで追跡できます。", "error")
+            else:
+                flash("ページ内に金額が見つかりませんでした (ログインが必要なページの可能性があります)。", "error")
+        except pagereader.FetchError as e:
+            flash(f"ページを開けませんでした: {e}", "error")
         return redirect(url_for("sources_page", test_url=url))
 
     @app.post("/suppliers/<int:sid>/toggle-auto")

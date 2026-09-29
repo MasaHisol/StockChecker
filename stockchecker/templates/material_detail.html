@@ -22,6 +22,19 @@
   {% if findings %}<ul class="reasons" style="font-size:13px;margin-top:10px">{% for f in findings %}<li>{{ f.message }}</li>{% endfor %}</ul>{% endif %}
 </div>
 
+<form method="post" action="{{ url_for('watch_url', mid=m.id) }}" class="card" id="watch">
+  <h2>商品ページの URL を貼り付けて価格を追跡</h2>
+  <div class="row"><input name="url" type="url" required placeholder="https://www.monotaro.com/g/...  /  https://jp.misumi-ec.com/vona2/detail/..." style="flex:1;min-width:240px">
+    <button onclick="this.textContent='読み取り中…'">追跡する</button></div>
+  <div class="hint">価格を自動で読み取れない場合は、ページ内の金額一覧から選ぶだけで設定できます (サイトごとに記憶)。以後、定期チェックで自動更新されます。</div>
+  {% set urls = (m.watch_urls or '').splitlines()|select|list %}
+  {% if urls %}<table style="margin-top:10px"><tbody>{% for u in urls %}<tr>
+    <td class="small" style="word-break:break-all;padding-left:0"><a href="{{ u }}" target="_blank" rel="noopener">{{ u }}</a></td>
+    <td class="nowrap" style="text-align:right;padding-right:0"><a class="btn ghost sm" href="{{ url_for('watch_pick', mid=m.id, url=u) }}">価格の場所を指定し直す</a>
+      <form method="post" action="{{ url_for('watch_remove', mid=m.id) }}" style="display:inline"><input type="hidden" name="url" value="{{ u }}"><button class="danger sm">外す</button></form></td>
+  </tr>{% endfor %}</tbody></table>{% endif %}
+</form>
+
 <div class="kpis">
   <div class="kpi"><div class="label">一般単価</div><div class="value">{% if obs and obs[0].unit_price is not none %}¥{{ obs[0].unit_price|yen }}{% else %}—{% endif %}</div>
     {% if m.budget_unit_price %}<div class="small muted">予算 ¥{{ m.budget_unit_price|yen }}</div>{% endif %}</div>
@@ -48,7 +61,7 @@
     <dt>仕様</dt><dd>{{ m.spec or '—' }}</dd>
     <dt>担当者</dt><dd>{% for s in staff if s.id == m.owner_id %}{{ s.name }}{% else %}—{% endfor %}</dd>
     <dt>主仕入先</dt><dd>{% for s in suppliers if s.id == m.preferred_supplier_id %}{{ s.name }}{% else %}—{% endfor %}</dd>
-    <dt>監視ページ</dt><dd>{% for u in (m.watch_urls or '').splitlines() if u.strip() %}<div class="small" style="word-break:break-all"><a href="{{ u }}" target="_blank" rel="noopener">{{ u }}</a></div>{% else %}<span class="muted">未登録 — <a href="{{ url_for('material_edit', mid=m.id) }}">商品ページを登録</a>すると無料で自動追跡します</span>{% endfor %}</dd>
+    <dt>監視ページ</dt><dd>{{ (m.watch_urls or '').splitlines()|select|list|length }} 件{% if not m.watch_urls %} <span class="muted">— <a href="#watch">URL を貼り付け</a>ると自動追跡します</span>{% endif %}</dd>
     <dt>備考</dt><dd>{{ m.notes or '—' }}</dd>
   </dl>
 </div>

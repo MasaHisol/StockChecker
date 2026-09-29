@@ -74,3 +74,10 @@ CREATE TABLE IF NOT EXISTS emails (
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     sent_at TEXT
 );
+
+-- サイトごとに利用者が指定した「価格の見出し」
+CREATE TABLE IF NOT EXISTS site_hints (
+    domain TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    tax TEXT                          -- incl (税込) / excl (税抜) / NULL
+);
