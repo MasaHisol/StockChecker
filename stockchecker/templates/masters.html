@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="grid" style="gap:16px">
+<div class="card scroll">
+<h2>担当者</h2>
+<table><tr><th>氏名</th><th>メール</th><th>Slack</th></tr>
+{% for s in staff %}<tr><td>{{ s.name }}</td><td>{{ s.email }}</td><td>{{ '設定済' if s.slack_webhook else '-' }}</td></tr>{% endfor %}</table>
+<form method="post"><input type="hidden" name="type" value="staff">
+  <label>氏名</label><input name="name" required><label>メール</label><input name="email" type="email" required>
+  <label>Slack/Teams Incoming Webhook URL (任意)</label><input name="slack_webhook">
+  <p><button>追加</button></p></form>
+</div>
+<div class="card scroll">
+<h2>仕入先</h2>
+<table><tr><th>社名</th><th>担当</th><th>メール</th><th>見積依頼 自動送信</th></tr>
+{% for s in suppliers %}<tr><td>{{ s.name }}</td><td>{{ s.contact_name or '-' }}</td><td>{{ s.email }}</td>
+<td><form method="post" action="{{ url_for('supplier_toggle', sid=s.id) }}"><button class="sub">{{ 'ON' if s.auto_send_rfq else 'OFF' }}</button></form></td></tr>{% endfor %}</table>
+<form method="post"><input type="hidden" name="type" value="supplier">
+  <label>社名</label><input name="name" required><label>担当者名</label><input name="contact_name">
+  <label>メール</label><input name="email" type="email" required>
+  <label class="row"><input type="checkbox" name="auto_send_rfq" value="1" style="width:auto"> 見積依頼を自動送信する (全体設定 SC_AUTO_SEND=1 も必要)</label>
+  <p><button>追加</button></p></form>
+</div>
+</div>
+{% endblock %}

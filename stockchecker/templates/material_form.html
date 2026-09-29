@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+<h1>{{ '部材編集' if m.id else '部材登録' }}</h1>
+<form method="post">
+<div class="grid">
+  <div><label>品番 *</label><input name="part_number" required value="{{ m.part_number or '' }}"></div>
+  <div><label>品名 *</label><input name="name" required value="{{ m.name or '' }}"></div>
+  <div><label>メーカー</label><input name="maker" value="{{ m.maker or '' }}"></div>
+  <div><label>仕様</label><input name="spec" value="{{ m.spec or '' }}"></div>
+  <div><label>数量</label><input name="quantity" type="number" min="1" value="{{ m.quantity or 1 }}"></div>
+  <div><label>単位</label><input name="unit" value="{{ m.unit or '個' }}"></div>
+  <div><label>必要納期</label><input name="required_date" type="date" value="{{ m.required_date or '' }}"></div>
+  <div><label>予算単価 (円)</label><input name="budget_unit_price" value="{{ m.budget_unit_price if m.budget_unit_price is not none else '' }}"></div>
+  <div><label>担当者</label><select name="owner_id"><option value="">-</option>
+    {% for s in staff %}<option value="{{ s.id }}" {{ 'selected' if m.owner_id|string == s.id|string }}>{{ s.name }}</option>{% endfor %}</select></div>
+  <div><label>主仕入先 (見積依頼先)</label><select name="preferred_supplier_id"><option value="">-</option>
+    {% for s in suppliers %}<option value="{{ s.id }}" {{ 'selected' if m.preferred_supplier_id|string == s.id|string }}>{{ s.name }}</option>{% endfor %}</select></div>
+</div>
+<label class="row" style="margin-top:12px"><input type="checkbox" name="custom_item" value="1" style="width:auto" {{ 'checked' if m.custom_item }}> 特注品 (一般価格がなく、常に見積が必要)</label>
+<label>備考</label><input name="notes" value="{{ m.notes or '' }}">
+{% if not m.id %}
+<h2 style="margin-top:16px">把握している一般価格・納期 (任意)</h2>
+<div class="grid">
+  <div><label>一般単価 (円)</label><input name="init_price"></div>
+  <div><label>一般納期 (日)</label><input name="init_lead_time" type="number"></div>
+</div>
+{% endif %}
+<p><button>保存</button></p>
+</form>
+</div>
+{% endblock %}

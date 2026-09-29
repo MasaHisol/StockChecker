@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+<h1>メール {{ {'draft':'下書き','sent':'送信済','failed':'送信失敗'}[e.status] }}</h1>
+{% if e.error %}<p class="muted">{{ e.error }}</p>{% endif %}
+<form method="post">
+  <label>宛先</label><input name="to_addr" value="{{ e.to_addr }}" {{ 'readonly' if e.status=='sent' }}>
+  <label>CC</label><input name="cc_addr" value="{{ e.cc_addr or '' }}" {{ 'readonly' if e.status=='sent' }}>
+  <label>件名</label><input name="subject" value="{{ e.subject }}" {{ 'readonly' if e.status=='sent' }}>
+  <label>本文</label><textarea name="body" {{ 'readonly' if e.status=='sent' }}>{{ e.body }}</textarea>
+  {% if e.status != 'sent' %}
+  <p class="row">
+    <button name="action" value="save" class="sub">保存</button>
+    <button name="action" value="send" onclick="return confirm('送信しますか？')">送信</button>
+    <button name="action" value="discard" class="danger" onclick="return confirm('破棄しますか？')">破棄</button>
+    {% if not settings.smtp_host %}<span class="muted">SMTP 未設定のため、送信すると {{ settings.outbox_dir }}/ に .eml が保存されます。</span>{% endif %}
+  </p>
+  {% endif %}
+</form>
+</div>
+{% endblock %}

@@ -1,0 +1,5 @@
+__pycache__/
+*.db
+outbox/
+.venv/
+.pytest_cache/

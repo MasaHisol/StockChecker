@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <div class="row" style="justify-content:space-between">
+    <h1>{{ m.name }} <span class="muted">{{ m.part_number }}</span></h1>
+    <div class="row">
+      <a class="btn sub" href="{{ url_for('material_edit', mid=m.id) }}">編集</a>
+      <form method="post" action="{{ url_for('material_delete', mid=m.id) }}" onsubmit="return confirm('無効化しますか？')"><button class="danger">無効化</button></form>
+    </div>
+  </div>
+  <div class="muted">{{ m.maker or '' }} {{ m.spec or '' }}　数量 {{ m.quantity }} {{ m.unit }}　必要納期 {{ m.required_date or '-' }}　予算単価 {{ m.budget_unit_price or '-' }}{% if m.custom_item %}　<span class="tag w">特注品</span>{% endif %}</div>
+  <div style="margin-top:10px">
+  {% for f in findings %}<div><span class="tag {{ 'q' if f.needs_quote else 'w' }}">{{ '要見積' if f.needs_quote else '注意' }}</span> {{ f.message }}</div>
+  {% else %}<span class="tag ok">問題なし</span>{% endfor %}
+  </div>
+</div>
+
+<div class="grid" style="gap:16px">
+<div class="card">
+  <h2>見積依頼メールを作成</h2>
+  <form method="post" action="{{ url_for('make_rfq', mid=m.id) }}">
+    <label>仕入先</label><select name="supplier_id" required>{% for s in suppliers %}<option value="{{ s.id }}" {{ 'selected' if m.preferred_supplier_id == s.id }}>{{ s.name }}</option>{% endfor %}</select>
+    <p><button>下書き作成</button></p>
+  </form>
+</div>
+<div class="card">
+  <h2>注文メールを作成</h2>
+  <form method="post" action="{{ url_for('make_order', mid=m.id) }}">
+    <label>仕入先</label><select name="supplier_id" required>{% for s in suppliers %}<option value="{{ s.id }}" {{ 'selected' if m.preferred_supplier_id == s.id }}>{{ s.name }}</option>{% endfor %}</select>
+    <div class="grid"><div><label>数量</label><input name="quantity" type="number" value="{{ m.quantity }}"></div>
+    <div><label>単価 (円)</label><input name="unit_price" required value="{{ obs[0].unit_price if obs and obs[0].unit_price is not none else '' }}"></div></div>
+    <label>納期</label><input name="delivery_date" type="date" value="{{ m.required_date or '' }}">
+    <p><button>下書き作成</button></p>
+  </form>
+</div>
+<div class="card">
+  <h2>価格・納期を記録 (見積回答など)</h2>
+  <form method="post" action="{{ url_for('add_observation', mid=m.id) }}">
+    <div class="grid">
+      <div><label>単価 (円)</label><input name="unit_price"></div>
+      <div><label>納期 (日)</label><input name="lead_time_days" type="number"></div>
+      <div><label>在庫数</label><input name="stock_qty" type="number"></div>
+      <div><label>種別</label><select name="source"><option value="quote">見積回答</option><option value="manual">一般価格(手入力)</option></select></div>
+    </div>
+    <label>仕入先</label><select name="supplier_id"><option value="">-</option>{% for s in suppliers %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}</select>
+    <p><button>記録</button></p>
+  </form>
+</div>
+</div>
+
+<div class="card scroll">
+  <h2>価格・納期の推移</h2>
+  {% if chart|length > 1 %}
+  {% set ps = chart|map(attribute='p')|list %}{% set lo = ps|min %}{% set hi = ps|max %}{% set span = (hi - lo) or 1 %}
+  <svg viewBox="0 0 600 140" style="width:100%;max-width:600px;height:auto" role="img" aria-label="単価推移">
+    <polyline fill="none" stroke="var(--accent)" stroke-width="2" points="{% for c in chart %}{{ 20 + loop.index0 * 560 / (chart|length - 1) }},{{ 120 - (c.p - lo) / span * 100 }} {% endfor %}"/>
+    {% for c in chart %}<circle cx="{{ 20 + loop.index0 * 560 / (chart|length - 1) }}" cy="{{ 120 - (c.p - lo) / span * 100 }}" r="3" fill="var(--accent)"><title>{{ c.t }}: {{ c.p }} 円</title></circle>{% endfor %}
+    <text x="4" y="14" font-size="11" fill="var(--muted)">{{ '{:,.0f}'.format(hi) }}</text><text x="4" y="136" font-size="11" fill="var(--muted)">{{ '{:,.0f}'.format(lo) }}</text>
+  </svg>
+  {% endif %}
+  <table>
+  <tr><th>日時</th><th>取得元</th><th>仕入先</th><th class="num">単価</th><th class="num">納期</th><th class="num">在庫</th></tr>
+  {% for o in obs %}<tr><td class="muted">{{ o.observed_at }}</td><td>{{ o.source }}</td><td>{{ o.supplier_name or '-' }}</td>
+  <td class="num">{{ o.unit_price if o.unit_price is not none else '-' }}</td><td class="num">{{ o.lead_time_days if o.lead_time_days is not none else '-' }}</td><td class="num">{{ o.stock_qty if o.stock_qty is not none else '-' }}</td></tr>
+  {% else %}<tr><td colspan="6" class="muted">記録なし</td></tr>{% endfor %}
+  </table>
+</div>
+
+<div class="card scroll">
+  <h2>メール履歴</h2>
+  <table>{% for e in emails %}<tr><td>{{ e.created_at }}</td><td>{{ e.kind }}</td><td><a href="{{ url_for('email_edit', eid=e.id) }}">{{ e.subject }}</a></td><td>{{ e.status }}</td></tr>
+  {% else %}<tr><td class="muted">なし</td></tr>{% endfor %}</table>
+</div>
+{% endblock %}

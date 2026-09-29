@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}部材価格・納期トラッカー{% endblock %}</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--fg:#1d2330;--muted:#6b7280;--line:#e3e6eb;--accent:#2563eb;--warn:#b45309;--warn-bg:#fef3c7;--bad:#b91c1c;--bad-bg:#fee2e2;--ok:#15803d;--ok-bg:#dcfce7}
+@media (prefers-color-scheme:dark){:root{--bg:#12151b;--card:#1b2029;--fg:#e5e7eb;--muted:#9ca3af;--line:#2d3440;--accent:#60a5fa;--warn:#fbbf24;--warn-bg:#3a2e10;--bad:#f87171;--bad-bg:#3b1618;--ok:#4ade80;--ok-bg:#12301d}}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,"Hiragino Sans","Noto Sans JP",sans-serif;background:var(--bg);color:var(--fg);font-size:14px}
+header{background:var(--card);border-bottom:1px solid var(--line);padding:10px 16px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+header b{font-size:16px}header a{color:var(--fg);text-decoration:none}header a:hover{color:var(--accent)}
+main{max-width:1200px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:16px}
+h1{font-size:20px;margin:0 0 12px}h2{font-size:16px;margin:0 0 10px}
+table{width:100%;border-collapse:collapse}th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:600;font-size:12px}.num{text-align:right;font-variant-numeric:tabular-nums}
+.scroll{overflow-x:auto}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;white-space:nowrap}
+.q{background:var(--bad-bg);color:var(--bad)}.w{background:var(--warn-bg);color:var(--warn)}.ok{background:var(--ok-bg);color:var(--ok)}
+.flash{background:var(--ok-bg);color:var(--ok);padding:10px 14px;border-radius:6px;margin-bottom:12px}
+a{color:var(--accent)}
+input,select,textarea{font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);width:100%}
+textarea{min-height:320px;font-family:ui-monospace,monospace}
+label{display:block;font-size:12px;color:var(--muted);margin:8px 0 2px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 16px}
+button,.btn{font:inherit;padding:6px 14px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer;text-decoration:none;display:inline-block}
+button.sub,.btn.sub{background:transparent;color:var(--accent)}button.danger{background:var(--bad);border-color:var(--bad)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.muted{color:var(--muted)}
+.inline{display:inline}
+</style>
+</head>
+<body>
+<header>
+  <b>部材価格・納期トラッカー</b>
+  <a href="{{ url_for('index') }}">ダッシュボード</a>
+  <a href="{{ url_for('material_new') }}">部材登録</a>
+  <a href="{{ url_for('import_csv') }}">価格表取込</a>
+  <a href="{{ url_for('emails') }}">メール</a>
+  <a href="{{ url_for('master_page') }}">担当者・仕入先</a>
+</header>
+<main>
+{% for m in get_flashed_messages() %}<div class="flash">{{ m }}</div>{% endfor %}
+{% block body %}{% endblock %}
+</main>
+</body>
+</html>
