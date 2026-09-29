@@ -17,7 +17,7 @@ env:
   CHECK_URLS: >-
     https://jp.misumi-ec.com/vona2/detail/222000347909/?HissuCode=CP30-BA+2P+1-M+10A
     https://jp.misumi-ec.com/vona2/detail/222000347909/
-    https://www.monotaro.com/g/00017364/
+    https://www.monotaro.com/p/0202/9991/
 
 jobs:
   build:

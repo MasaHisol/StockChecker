@@ -313,7 +313,7 @@ def create_app(settings=None):
         except pagereader.FetchError as e:
             flash(f"ページを開けませんでした: {e}", "error")
             return redirect(url_for("material_detail", mid=mid))
-        if info.unit_price is None:
+        if info.unit_price is None or info.is_group:
             return render_template("watch_pick.html", m=m, info=info, url=url,
                                    debug_path=_save_debug(info))
         _add_watch_url(mid, url)
@@ -459,7 +459,10 @@ def create_app(settings=None):
         url = request.form.get("url", "").strip()
         try:
             i = pagereader.read(url, _hint_for(url))
-            if i.unit_price is not None:
+            if i.is_group:
+                flash("このページはサイズ違いをまとめた一覧ページです。目的のサイズを選んで開いた"
+                      "商品ページ (モノタロウなら /p/ で始まる URL) を貼り付けてください。", "error")
+            elif i.unit_price is not None:
                 flash(f"読み取り成功: 単価 ¥{i.unit_price:,.0f} ({i.method}{' / ブラウザ表示' if i.rendered else ''}) / "
                       f"納期 {i.lead_time_days if i.lead_time_days is not None else '不明'} 日 / "
                       f"在庫 {'あり' if i.in_stock else ('なし' if i.in_stock is False else '不明')}")

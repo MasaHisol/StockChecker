@@ -27,7 +27,7 @@ HEADERS = {
 
 PRICE_RE = re.compile(r"(?:[¥￥]\s*([\d,]+(?:\.\d+)?))|(?:([\d,]+(?:\.\d+)?)\s*円)")
 GOOD_LABEL = re.compile(r"価格|単価|販売|通常|特価|本体|税抜|税別|price|Price")
-BAD_LABEL = re.compile(r"送料|ポイント|合計|小計|以上|割引|OFF|クーポン|手数料|最大|まで|定価|希望小売|参考")
+BAD_LABEL = re.compile(r"送料|配送料|ポイント|合計|小計|以上|割引|OFF|クーポン|手数料|最大|まで|定価|希望小売|参考|基準|～")
 LEAD_PATTERNS = [
     (re.compile(r"(\d+)\s*[~〜～\-]\s*(\d+)\s*営業日"), 1.4),
     (re.compile(r"(\d+)\s*営業日"), 1.4),
@@ -56,6 +56,7 @@ class PageInfo:
     tax_included: bool = None
     candidates: list = field(default_factory=list)   # 価格候補 [{value, label, context, tax}]
     rendered: bool = False
+    is_group: bool = False          # サイズ違いをまとめた一覧ページ
     html: str = None                # 読み取った HTML (トラブル調査用)
 
 
@@ -314,6 +315,22 @@ def parse(html, url="", hint=None):
                 info.unit_price, info.method = c["value"], f"推定 (「{c['label']}」の金額)"
                 info.tax_included = c["tax"] == "incl"
                 break
+    # 税込/税別の補正: 読んだ価格がページ上の「税込」表示と一致し、
+    # 近い値の「販売価格(税別)」表示があれば、そちらを採用する (例: モノタロウ)
+    if info.unit_price is not None and not (info.method or "").startswith("記憶"):
+        same = [c for c in info.candidates if abs(c["value"] - info.unit_price) < 0.01]
+        if any(c["tax"] == "incl" for c in same) and not any(c["tax"] == "excl" for c in same):
+            excl = [c for c in info.candidates if c["tax"] == "excl" and GOOD_LABEL.search(c["label"])
+                    and not BAD_LABEL.search(c["label"])
+                    and 0.88 <= c["value"] / info.unit_price * 1.1 <= 1.02]
+            if excl:
+                info.unit_price, info.tax_included = excl[0]["value"], False
+                info.method = f"{info.method} → 「{excl[0]['label']}」を採用"
+            else:
+                info.tax_included = True
+    # 複数サイズをまとめた商品グループのページ
+    info.is_group = any("ProductGroup" in _types(d) for d in _iter_jsonld(html)) and \
+        not any("Product" in _types(d) for d in _iter_jsonld(html))
     # 在庫・納期
     if info.in_stock is None:
         if STOCK_OUT.search(text):

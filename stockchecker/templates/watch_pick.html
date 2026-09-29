@@ -6,6 +6,9 @@
   <div class="sub" style="word-break:break-all">{{ info.title or '' }} — <a href="{{ url }}" target="_blank" rel="noopener">{{ url }}</a></div>
 </div></div>
 
+{% if info.is_group %}<div class="flash err">このページはサイズ・型番違いをまとめた<b>一覧ページ</b>です。価格が型番ごとに違うため、
+目的の型番を選んで開いた商品ページの URL (モノタロウなら <code>/p/</code> で始まる URL) を貼り付けると確実です。
+<a href="{{ url_for('material_detail', mid=m.id) }}#watch">URL を貼り直す</a></div>{% endif %}
 <form method="post" action="{{ url_for('watch_pick', mid=m.id) }}">
 <input type="hidden" name="url" value="{{ url }}">
 <div class="card flush">

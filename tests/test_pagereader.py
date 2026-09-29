@@ -40,3 +40,24 @@ def test_table_column_price_and_misumi_url():
     i = r.parse(h, "https://jp.misumi-ec.com/vona2/detail/1/?HissuCode=CP30-BA+2P+1-M+10A")
     assert i.unit_price == 6480 and i.lead_time_days == 4
     assert i.part_number == "CP30-BA 2P 1-M 10A" and not i.tax_included
+
+
+MONOTARO_P = (  # モノタロウ商品ページ (/p/) の実際の構造を簡略化したもの
+    '<script type="application/ld+json">{"@context":"https://schema.org","@type":"Product",'
+    '"name":"フラットワッシャー 12M-FW","sku":"12M-FW","offers":{"@type":"Offer","price":241,'
+    '"availability":"https://schema.org/InStock"}}</script>'
+    '<div class="PriceArea"><span><span>参考基準価格(税別)</span>￥230</span>'
+    '<span><span>販売価格(税込)</span>￥241</span>'
+    '<div><span>販売価格(税別)</span></div><div><span><span>￥</span>219</span></div></div>'
+    '<div>3,500円(税別)以上で配送料無料</div>')
+
+
+def test_monotaro_product_page_uses_tax_excluded_price():
+    i = r.parse(MONOTARO_P)
+    assert i.unit_price == 219 and i.tax_included is False and r.net_price(i) == 219
+    assert i.part_number == "12M-FW" and i.in_stock
+
+
+def test_product_group_page_flagged():
+    h = '<script type="application/ld+json">{"@type":"ProductGroup","name":"フラットワッシャー"}</script><div>￥220</div>'
+    assert r.parse(h).is_group
