@@ -205,6 +205,7 @@ def create_app(settings=None):
                 "actor": g.get("actor"), "operator_set": request.cookies.get(OPERATOR_COOKIE) is not None,
                 "all_staff_for_operator": c.execute("SELECT id, name FROM staff WHERE active=1 ORDER BY name").fetchall(),
                 "running_job": jobs.current_job(c), "is_admin": True,
+                "today_label": f"{date.today().month}月{date.today().day}日 ({'月火水木金土日'[date.today().weekday()]})",
                 "order_labels": orders.STATUS}
 
     def _csrf_token():
@@ -279,6 +280,9 @@ def create_app(settings=None):
                          "pending": pending.get(m["id"]), "orders": open_orders.get(m["id"], [])})
         return rows
 
+    def web_targets_all(c):
+        return c.execute("SELECT COUNT(*) FROM materials WHERE active=1 AND COALESCE(watch_urls,'')!=''").fetchone()[0]
+
     # ================================================================ ダッシュボード
     @app.route("/")
     def index():
@@ -302,7 +306,14 @@ def create_app(settings=None):
                              "LEFT JOIN staff s ON s.id=a.user_id LEFT JOIN materials m ON m.id=a.material_id "
                              "ORDER BY a.id DESC LIMIT 12").fetchall()
         web_targets = sum(1 for r in rows if r["method"] == "web")
-        return render_template("index.html", rows=rows, quote=quote, confirm=confirm, noreply=noreply,
+        setup = {"staff": c.execute("SELECT COUNT(*) FROM staff WHERE active=1").fetchone()[0],
+                 "suppliers": c.execute("SELECT COUNT(*) FROM suppliers").fetchone()[0],
+                 "materials": c.execute("SELECT COUNT(*) FROM materials WHERE active=1").fetchone()[0],
+                 "urls": web_targets_all(c)}
+        hour = datetime.now().hour
+        greeting = "おはようございます" if hour < 11 else ("こんにちは" if hour < 18 else "おつかれさまです")
+        return render_template("index.html", setup=setup, greeting=greeting,
+                               rows=rows, quote=quote, confirm=confirm, noreply=noreply,
                                order_alerts=order_alerts, n_open_orders=n_open_orders, n_inbox=n_inbox,
                                drafts=drafts, last_job=last_job, job_errors=job_errors,
                                activity=activity, mine=mine, web_targets=web_targets)

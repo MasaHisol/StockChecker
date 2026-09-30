@@ -41,6 +41,17 @@
   </div>
 </nav>
 <main>
+<header class="topbar">
+  <form method="get" action="{{ url_for('materials') }}" class="search" role="search">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input type="search" name="q" value="{{ request.args.get('q', '') if ep == 'materials' else '' }}" placeholder="品番・品名・仕入先で探す" aria-label="部材を検索" id="global-search">
+    <kbd>/</kbd>
+  </form>
+  <div class="topbar-actions">
+    <a class="btn ghost sm" href="{{ url_for('inbox_page') }}" title="受信メール">受信メール{% if nav_counts and nav_counts.inbox %} <span class="count">{{ nav_counts.inbox }}</span>{% endif %}</a>
+    <a class="btn sm" href="{{ url_for('material_new') }}">＋ 部材を登録</a>
+  </div>
+</header>
 {% if running_job %}
 <div class="jobbar" id="jobbar" data-job="{{ running_job.id }}">
   <b>価格・納期を一括取得中</b>
@@ -59,7 +70,7 @@
   <input name="name" placeholder="一覧に無ければ名前を入力" style="max-width:200px"><button class="sm">決定</button>
 </form>
 {% endif %}
-{% for cat, m in get_flashed_messages(with_categories=true) %}<div class="flash {{ 'error' if cat == 'error' }}">{{ m }}</div>{% endfor %}
+<div class="toasts" aria-live="polite">{% for cat, m in get_flashed_messages(with_categories=true) %}<div class="toast {{ 'error' if cat == 'error' }}" role="status"><span class="toast-ic">{{ '!' if cat == 'error' else '✓' }}</span><span class="toast-msg">{{ m }}</span><button type="button" class="toast-x" aria-label="閉じる">×</button></div>{% endfor %}</div>
 {% block body %}{% endblock %}
 </main>
 </div>

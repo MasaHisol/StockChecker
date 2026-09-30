@@ -12,6 +12,30 @@
     if (b) { setTimeout(function () { b.disabled = true; b.textContent = b.dataset.busy; }, 0); }
   }, true);
 
+  // ---- 通知 (トースト): 成功は数秒で消える・エラーは閉じるまで表示
+  document.querySelectorAll('.toast').forEach(function (el, i) {
+    var close = function () { el.classList.add('out'); setTimeout(function () { el.remove(); }, 260); };
+    el.querySelector('.toast-x').addEventListener('click', close);
+    if (!el.classList.contains('error')) setTimeout(close, 5000 + i * 800);
+  });
+
+  // ---- 「/」キーで検索へ
+  var gs = document.getElementById('global-search');
+  document.addEventListener('keydown', function (e) {
+    var tag = (document.activeElement || {}).tagName;
+    if (e.key === '/' && gs && !/INPUT|TEXTAREA|SELECT/.test(tag)) { e.preventDefault(); gs.focus(); gs.select(); }
+  });
+
+  // ---- ホーム: やることの絞り込み
+  var chips = document.querySelector('[data-chips]'), todo = document.querySelector('[data-todo]');
+  var setChip = function (f) {
+    if (!chips || !todo) return;
+    chips.querySelectorAll('.chip').forEach(function (c) { c.classList.toggle('on', c.dataset.f === f); });
+    todo.querySelectorAll('li[data-type]').forEach(function (li) { li.style.display = (f === 'all' || li.dataset.type === f) ? '' : 'none'; });
+  };
+  if (chips) chips.addEventListener('click', function (e) { var c = e.target.closest('.chip'); if (c) setChip(c.dataset.f); });
+  document.querySelectorAll('[data-jump]').forEach(function (a) { a.addEventListener('click', function () { setChip(a.dataset.jump); }); });
+
   // ---- 一括取得の進捗 (実行中はページ上部に表示し、数秒ごとに更新)
   var bar = document.getElementById('jobbar');
   if (bar) {
@@ -63,7 +87,10 @@
     document.querySelectorAll('[data-seg] [data-f]').forEach(function (b) { b.addEventListener('click', function (e) { e.preventDefault(); st.status = b.dataset.f; apply(); }); });
     var q = document.getElementById('q'); if (q) q.addEventListener('input', function () { st.q = q.value.toLowerCase().trim(); apply(); });
     ['owner', 'method'].forEach(function (k) { var s = document.getElementById('f-' + k); if (s) s.addEventListener('change', function () { st[k] = s.value; apply(); }); });
-    var init = new URLSearchParams(location.search).get('status'); if (init) { st.status = init; apply(); }
+    var params = new URLSearchParams(location.search);
+    var init = params.get('status'); if (init) { st.status = init; }
+    var iq = params.get('q'); if (iq && q) { q.value = iq; st.q = iq.toLowerCase().trim(); }
+    if (init || iq) apply();
   }
 
   // ---- グラフ (1 系列の折れ線。十字線とツールチップ付き)
