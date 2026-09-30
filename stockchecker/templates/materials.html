@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block body %}
+{% set n_quote = rows|selectattr('status','equalto','quote')|list|length %}
+{% set n_warn = rows|selectattr('status','equalto','warn')|list|length %}
+{% set n_ok = rows|selectattr('status','equalto','ok')|list|length %}
+<div class="page-head">
+  <div><h1>部材一覧</h1><div class="sub">{{ rows|length }} 件 ・ チェックを入れるとまとめて操作できます</div></div>
+  <div class="row"><a class="btn ghost" href="{{ url_for('import_csv') }}">価格表の取込</a><a class="btn" href="{{ url_for('material_new') }}">＋ 部材を登録</a></div>
+</div>
+
+<form method="post" action="{{ url_for('materials_bulk') }}" class="card flush" data-bulk>
+  <div class="toolbar">
+    <div class="seg" data-seg>
+      <button type="button" class="on" data-f="all">すべて {{ rows|length }}</button>
+      <button type="button" data-f="quote">要見積 {{ n_quote }}</button>
+      <button type="button" data-f="warn">注意 {{ n_warn }}</button>
+      <button type="button" data-f="ok">OK {{ n_ok }}</button>
+    </div>
+    <select id="f-owner"><option value="">担当: 全員</option>{% for s in staff %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}</select>
+    <select id="f-method"><option value="">取得方法: すべて</option><option value="web">ネット (URL)</option><option value="mail">メール確認</option></select>
+    <input type="search" id="q" placeholder="品番・品名・仕入先で絞り込み" style="margin-left:auto">
+  </div>
+  <div class="bulkbar">
+    <b><span data-f="n">0</span> 件を選択中</b>
+    <button name="action" value="fetch" class="sm">選択分の価格を取得</button>
+    <button name="action" value="rfq" class="ghost sm">見積依頼をまとめて作成</button>
+    <button name="action" value="confirm" class="ghost sm">価格・納期確認をまとめて作成</button>
+    <button name="action" value="order" class="ghost sm">注文メールをまとめて作成</button>
+    <span class="hint" style="margin:0">メールは主仕入先ごとに 1 通にまとめます</span>
+  </div>
+  <div class="scroll">
+  <table data-filter-table>
+  <thead><tr><th class="check"><input type="checkbox" data-all aria-label="すべて選択"></th><th>状態</th><th>品番 / 品名</th><th>担当</th><th class="num">数量</th><th>必要納期</th><th class="num">一般単価</th><th>推移</th><th class="num">一般納期</th><th>取得方法 / 出典</th></tr></thead>
+  <tbody>
+  {% for r in rows %}{% set m = r.m %}
+  <tr data-status="{{ r.status }}" data-owner="{{ m.owner_id or '' }}" data-method="{{ r.method }}"
+      data-text="{{ (m.part_number ~ ' ' ~ m.name ~ ' ' ~ (m.maker or '') ~ ' ' ~ (m.supplier_name or ''))|lower }}">
+    <td class="check"><input type="checkbox" name="ids" value="{{ m.id }}" aria-label="{{ m.part_number }} を選択"></td>
+    <td>{% if r.status == 'quote' %}<span class="pill crit">● 要見積</span>{% elif r.status == 'warn' %}<span class="pill warn">▲ 注意</span>{% else %}<span class="pill good">✓ OK</span>{% endif %}
+      {% if r.pending %}<div style="margin-top:4px"><a class="pill {{ 'warn' if r.pending.status == 'draft' else 'info' }}" href="{{ url_for('email_edit', eid=r.pending.id) }}">{{ '下書き' if r.pending.status == 'draft' else '回答待ち' }}</a></div>{% endif %}</td>
+    <td><a href="{{ url_for('material_detail', mid=m.id) }}"><b>{{ m.part_number }}</b></a><div class="muted small">{{ m.name }}</div>
+      {% if r.findings or r.reminders %}<ul class="reasons">{% for f in r.findings %}<li>{{ f.message }}</li>{% endfor %}{% for a in r.reminders %}<li>{{ a.message }}</li>{% endfor %}</ul>{% endif %}</td>
+    <td class="nowrap">{{ m.owner_name or '—' }}</td>
+    <td class="num">{{ '{:,}'.format(m.quantity) }} <span class="muted">{{ m.unit }}</span></td>
+    <td class="nowrap">{{ m.required_date or '—' }}{% if r.days_left is not none %}<div class="small" style="{{ 'color:var(--crit)' if r.days_left <= 14 else 'color:var(--muted)' }}">{{ 'あと ' ~ r.days_left ~ ' 日' if r.days_left >= 0 else (-r.days_left) ~ ' 日超過' }}</div>{% endif %}</td>
+    <td class="num">{% if r.latest and r.latest.unit_price is not none %}¥{{ r.latest.unit_price|yen }}{% if r.delta is not none %}<div class="chg {{ 'up' if r.delta > 0 else 'down' }}">{{ '▲' if r.delta > 0 else '▼' }} {{ '%.1f'|format(r.delta|abs) }}%</div>{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
+    <td>{% if spark[m.id]|length > 1 %}<svg class="spark" data-points='{{ spark[m.id]|chartpts("p")|tojson }}' role="img" aria-label="単価の推移"></svg>{% else %}<span class="muted small">—</span>{% endif %}</td>
+    <td class="num">{% if r.latest and r.latest.lead_time_days is not none %}{{ r.latest.lead_time_days }} 日{% else %}<span class="muted">—</span>{% endif %}</td>
+    <td class="small">{% if r.method == 'web' %}<span class="pill info">ネット</span>{% else %}<span class="pill off">メール確認</span>{% endif %}
+      {% if r.latest %}<div style="margin-top:3px">{% if r.latest.url %}<a href="{{ r.latest.url }}" target="_blank" rel="noopener">{{ r.latest.vendor or source_labels.get(r.latest.source, r.latest.source) }}</a>{% else %}{{ r.latest.vendor or source_labels.get(r.latest.source, r.latest.source) }}{% endif %}
+        <span class="muted">{{ r.latest.observed_at[5:10] }}</span></div>{% endif %}
+      {% if r.method == 'mail' and r.confirm_due %}<div class="muted">次回確認 {{ r.confirm_due.strftime('%m/%d') }}</div>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+  </table>
+  </div>
+  {% if not rows %}<div class="empty">まだ部材が登録されていません。<br><a class="btn" href="{{ url_for('material_new') }}">最初の部材を登録</a></div>{% endif %}
+  <div class="empty" id="nohit" style="display:none">条件に合う部材はありません。</div>
+</form>
+{% endblock %}

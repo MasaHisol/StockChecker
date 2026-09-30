@@ -2,7 +2,9 @@
 
 - データ (DB・送信メール・設定) は exe と同じフォルダに保存する
 - 設定は同じフォルダの stockchecker.ini (初回起動時に雛形を生成)
-- 起動中は設定した間隔で定期チェックを自動実行する
+- 価格・納期の取得は画面の「一括取得」ボタンで行う (自動では取得しない)
+- 起動中は 30 分ごとに「確認期限」「回答待ち」のリマインドだけを確認する
+- share = 1 にすると社内ネットワークの他の PC からも使える (チーム共有)
 """
 import configparser
 import logging
@@ -10,7 +12,6 @@ import os
 import socket
 import sys
 import threading
-import time
 import webbrowser
 from pathlib import Path
 
@@ -22,10 +23,11 @@ TEMPLATE = """\
 [app]
 port = 5000
 open_browser = 1
-; 定期チェックの間隔 (時間)。0 で無効
-check_interval_hours = 24
-; 価格取得にデモ用の擬似相場を使う (1/0)。[sources] 設定時は 0 のままにしてください
-demo_prices = 0
+; 1 にすると同じ社内ネットワークの PC からブラウザで使えます (チーム共有)。
+; 常時起動している PC で有効にし、起動時に表示されるアドレスをメンバーに伝えてください
+share = 0
+; リマインド (確認期限・回答待ち) を確認する間隔 (分)
+reminder_interval_minutes = 30
 
 [company]
 company_name = 株式会社サンプル
@@ -130,18 +132,20 @@ def free_port(preferred):
     return preferred
 
 
-def scheduler(settings, hours, demo):
-    from stockchecker import db, service
-    from stockchecker.app import build_providers
-    while True:
-        try:
-            conn = db.connect(settings.database)
-            s = service.run_checks(conn, settings, build_providers(settings, demo))
-            conn.close()
-            logging.info("定期チェック完了: %s", s)
-        except Exception:
-            logging.exception("定期チェックに失敗しました")
-        time.sleep(hours * 3600)
+def lan_addresses():
+    ips = set()
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))  # 実際には送信しない (経路からアドレスを得る)
+            ips.add(s.getsockname()[0])
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ips.add(info[4][0])
+    except OSError:
+        pass
+    return sorted(ip for ip in ips if not ip.startswith("127."))
 
 
 def main():
@@ -156,25 +160,30 @@ def main():
     from stockchecker.config import Settings
 
     settings = Settings.from_env()
-    app = create_app(settings)
+    settings.background = True
+    settings.reminder_interval_minutes = max(1, cp.getint("app", "reminder_interval_minutes", fallback=30))
+    share = cp.getboolean("app", "share", fallback=False)
     port = free_port(cp.getint("app", "port"))
     url = f"http://127.0.0.1:{port}/"
-
-    hours = cp.getfloat("app", "check_interval_hours")
-    if hours > 0:
-        threading.Thread(target=scheduler, daemon=True,
-                         args=(settings, hours, cp.getboolean("app", "demo_prices"))).start()
+    if share:
+        settings.lan_urls = [f"http://{socket.gethostname()}:{port}/"] + \
+            [f"http://{ip}:{port}/" for ip in lan_addresses()]
+    app = create_app(settings)
     if cp.getboolean("app", "open_browser"):
         threading.Timer(1.0, webbrowser.open, args=(url,)).start()
 
     print("=" * 60)
     print(" 部材価格・納期トラッカー 起動中")
     print(f" ブラウザで {url} を開いてください")
+    if share:
+        print(" チーム共有: 同じ社内ネットワークの PC からは次のアドレスで使えます")
+        for u in settings.lan_urls:
+            print(f"   {u}")
     print(f" データ・設定フォルダ: {BASE}")
     print(" 終了するにはこのウィンドウを閉じてください")
     print("=" * 60)
     from waitress import serve
-    serve(app, host="127.0.0.1", port=port)
+    serve(app, host="0.0.0.0" if share else "127.0.0.1", port=port, threads=8)
 
 
 if __name__ == "__main__":

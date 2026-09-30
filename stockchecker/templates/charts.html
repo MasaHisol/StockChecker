@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head">
+  <div><h1>価格推移</h1><div class="sub">一括取得・見積回答などで記録した単価の推移 ({{ periods[period] }}) ・ グラフにマウスを乗せると日付と値を表示</div></div>
+</div>
+<form method="get" class="card row" style="padding:12px 18px">
+  <div class="seg">{% for k, label in periods.items() %}<a href="{{ url_for('charts', period=k, owner=owner or '', q=q) }}" class="{{ 'on' if k == period }}">{{ label }}</a>{% endfor %}</div>
+  <input type="hidden" name="period" value="{{ period }}">
+  <select name="owner" onchange="this.form.submit()" style="width:auto"><option value="">担当: 全員</option>{% for s in staff %}<option value="{{ s.id }}" {{ 'selected' if owner == s.id }}>{{ s.name }}</option>{% endfor %}</select>
+  <input type="search" name="q" value="{{ q }}" placeholder="品番・品名" style="max-width:220px">
+  <button class="ghost sm">絞り込む</button>
+</form>
+
+{% if ranked %}
+{% set mx = [ranked|map(attribute='change')|map('abs')|max, 1]|max %}
+<div class="card">
+  <div class="card-head"><h2>期間内の単価変動 (大きい順)</h2><span class="small muted">期間の最初と最後の記録を比較 ・ <span class="chg up">▲ 値上がり</span> <span class="chg down">▼ 値下がり</span></span></div>
+  <div class="rank">
+  {% for c in ranked %}
+    <a href="{{ url_for('material_detail', mid=c.m.id) }}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ c.m.name }}">{{ c.m.part_number }}</a>
+    <div class="bar" role="img" aria-label="{{ '%+.1f'|format(c.change) }}%"><span class="mid"></span>
+      {% set w = (c.change|abs) / mx * 50 %}
+      {% if c.change >= 0 %}<i style="left:50%;width:{{ w }}%;background:var(--up)"></i>{% else %}<i style="right:50%;width:{{ w }}%;background:var(--down)"></i>{% endif %}</div>
+    <span class="chg {{ 'up' if c.change > 0 else 'down' }}" style="text-align:right">{{ '▲' if c.change > 0 else '▼' }} {{ '%.1f'|format(c.change|abs) }}%</span>
+  {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div class="mcards">
+{% for c in cards %}
+  <div class="mcard">
+    <div class="top"><a class="name" href="{{ url_for('material_detail', mid=c.m.id) }}" title="{{ c.m.name }}">{{ c.m.part_number }}</a>
+      {% if c.change is not none and c.pts|length > 1 %}<span class="chg {{ 'up' if c.change > 0 else 'down' if c.change < 0 else '' }}">{{ '▲' if c.change > 0 else '▼' if c.change < 0 else '±' }} {{ '%.1f'|format(c.change|abs) }}%</span>{% endif %}</div>
+    <div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.m.name }}{% if c.m.owner_name %} ・ {{ c.m.owner_name }}{% endif %}</div>
+    <div class="price">{{ '¥' ~ (c.last|yen) if c.last is not none else '—' }}</div>
+    {% if c.pts|length > 1 %}
+      <div class="chart" data-compact="1" data-points='{{ c.pts|chartpts("p")|tojson }}' data-unit="円"><svg role="img" aria-label="{{ c.m.part_number }} の単価の推移"></svg><div class="tip"></div></div>
+      <div class="small muted">最安 ¥{{ c.lo|yen }} ・ 最高 ¥{{ c.hi|yen }} ・ {{ c.pts|length }} 回記録{% if c.lead %} ・ 納期 {{ c.lead[-1].l }} 日{% endif %}</div>
+    {% else %}<div class="small muted" style="padding:20px 0">{{ '記録が 1 件のみです' if c.pts else 'この期間の記録がありません' }}</div>{% endif %}
+  </div>
+{% endfor %}
+</div>
+{% if not cards %}<div class="card empty">対象の部材がありません。</div>{% endif %}
+{% endblock %}

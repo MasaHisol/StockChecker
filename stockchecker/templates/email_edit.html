@@ -1,9 +1,13 @@
 {% extends "base.html" %}
 {% block body %}
 <div class="page-head"><div>
-  <div class="sub"><a href="{{ url_for('emails') }}">メール</a> / {{ kind_labels[e.kind] }}</div>
-  <h1>{{ e.subject }}</h1></div><div>{{ status_pill(e.status) }}</div></div>
-{% if e.status == 'failed' %}<div class="flash err">{{ e.error }}</div>{% elif e.error %}<div class="sub" style="margin-bottom:10px">{{ e.error }}</div>{% endif %}
+  <div class="sub"><a href="{{ url_for('emails') }}">メール</a> / {{ kind_labels.get(e.kind, e.kind) }}{% if e.auto %} (自動作成){% endif %}</div>
+  <h1>{{ e.subject }}</h1>
+  <div class="sub">作成 {{ e.created_at[:16] }}{% if author %} ・ {{ author.name }}{% endif %}{% if e.sent_at %} ・ 送信 {{ e.sent_at[:16] }}{% endif %}{% if e.answered_at %} ・ 回答 {{ e.answered_at[:16] }}{% endif %}</div></div>
+  <div class="row">{{ status_pill(e.status) }}{% if e.answered_at %}<span class="pill good">回答あり</span>{% endif %}</div></div>
+{% if e.status == 'failed' %}<div class="flash error">{{ e.error }}</div>{% endif %}
+{% if orig %}<div class="card small">督促の元メール: <a href="{{ url_for('email_edit', eid=orig.id) }}">{{ orig.subject }}</a> ({{ (orig.sent_at or orig.created_at)[:10] }})</div>{% endif %}
+<div class="split">
 <form method="post" class="card">
   {% set ro = 'readonly' if e.status == 'sent' %}
   <div class="form-grid" style="grid-template-columns:1fr 1fr">
@@ -19,6 +23,19 @@
     <button name="action" value="discard" class="danger" onclick="return confirm('この下書きを破棄しますか？')" style="margin-left:auto">破棄</button>
   </div>
   {% if not settings.smtp_host %}<div class="hint">メールサーバー (SMTP) が未設定のため、送信すると {{ settings.outbox_dir }} フォルダに .eml ファイルとして保存されます。Outlook 等で開いて送信できます。</div>{% endif %}
+  {% elif e.kind in ('rfq','confirm','followup') and not e.answered_at %}
+  <div class="row" style="margin-top:14px">
+    <button name="action" value="answered">回答ありとして記録</button>
+    <button name="action" value="followup" class="ghost">督促メールを作成</button>
+  </div>
+  <div class="hint">回答に価格・納期があれば、部材画面の「見積回答・価格を記録」で記録すると履歴とグラフに反映されます。</div>
   {% endif %}
 </form>
+<div>
+  <div class="card"><h2>対象の部材</h2>
+    {% if mats %}<ul class="feed">{% for m in mats %}<li><a href="{{ url_for('material_detail', mid=m.id) }}"><b>{{ m.part_number }}</b></a> <span class="muted small">{{ m.name }}</span></li>{% endfor %}</ul>
+    {% else %}<div class="small muted">—</div>{% endif %}</div>
+  {% if e.status != 'sent' and is_admin %}<div class="card small muted">文面の元になるテンプレートは <a href="{{ url_for('templates_page', kind=e.kind) }}">設定 › メールテンプレート</a> で変更できます。</div>{% endif %}
+</div>
+</div>
 {% endblock %}

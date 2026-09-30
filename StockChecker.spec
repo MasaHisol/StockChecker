@@ -6,6 +6,7 @@ pw_datas, pw_binaries, pw_hidden = collect_all("playwright")  # ブラウザ操�
 a = Analysis(
     ["launcher.py"],
     datas=[("stockchecker/templates", "stockchecker/templates"),
+           ("stockchecker/static", "stockchecker/static"),
            ("stockchecker/schema.sql", "stockchecker")] + pw_datas,
     binaries=pw_binaries,
     hiddenimports=["waitress", "anthropic"] + pw_hidden,

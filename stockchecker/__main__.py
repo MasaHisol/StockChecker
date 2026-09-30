@@ -1,7 +1,8 @@
 """CLI
 
   python -m stockchecker serve [--host 0.0.0.0 --port 5000]
-  python -m stockchecker check [--demo] [--no-notify]   # cron 等で定期実行
+  python -m stockchecker check [--demo] [--no-notify]   # 全部材の価格取得と判定 (任意で cron 等から)
+  python -m stockchecker remind                         # 確認期限・回答待ちのリマインドを 1 回実行
   python -m stockchecker seed                           # デモデータ投入
 """
 import argparse
@@ -36,10 +37,19 @@ def seed(conn):
                   "VALUES (?,?,?,?,?,?,?,?,?,?)",
                   (pn, name, maker, spec, qty, req, budget, custom, owner, sup))
     c.commit()
-    db.add_observation(c, 1, "manual", 1450, 90, observed_at="2026-06-01 09:00:00")
-    db.add_observation(c, 2, "manual", 1.8, 14)
-    db.add_observation(c, 3, "manual", 26000, 7, observed_at="2026-09-01 09:00:00")
-    db.add_observation(c, 3, "manual", 31000, 7)
+    import random
+    from datetime import datetime, timedelta
+    rnd = random.Random(1)
+    base = {1: 1450, 2: 1.8, 3: 26000}
+    for mid, p in base.items():  # 半年分の推移 (グラフ確認用)
+        for w in range(26, -1, -2):
+            p = round(p * (1 + rnd.uniform(-0.03, 0.045)), 2 if p < 100 else 0)
+            at = (datetime.now() - timedelta(weeks=w)).strftime("%Y-%m-%d 09:00:00")
+            db.add_observation(c, mid, "page" if mid != 3 else "quote", p, [60, 14, 7][mid - 1] + rnd.randint(-3, 5),
+                               vendor=["Mouser", "モノタロウ", "株式会社部品商事"][mid - 1], observed_at=at)
+    c.execute("UPDATE materials SET watch_urls='https://www.monotaro.com/p/0202/9991/' WHERE id=2")
+    c.execute("UPDATE materials SET created_at='2026-05-01 09:00:00' WHERE id=4")
+    c.commit()
     print("デモデータを投入しました。")
 
 
@@ -53,17 +63,22 @@ def main():
     cp.add_argument("--demo", action="store_true", help="デモ用擬似相場で価格取得する")
     cp.add_argument("--no-notify", action="store_true")
     sub.add_parser("seed")
+    sub.add_parser("remind")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO)
 
     settings = Settings.from_env()
     if args.cmd == "serve":
-        create_app(settings).run(host=args.host, port=args.port)
+        settings.background = True
+        create_app(settings).run(host=args.host, port=args.port, threaded=True)
         return
     conn = db.connect(settings.database)
     db.init_db(conn)
     if args.cmd == "seed":
         seed(conn)
+    elif args.cmd == "remind":
+        from . import reminders
+        print(json.dumps(reminders.scan(conn, settings), ensure_ascii=False))
     elif args.cmd == "check":
         s = service.run_checks(conn, settings, build_providers(settings, args.demo),
                                notify=not args.no_notify)

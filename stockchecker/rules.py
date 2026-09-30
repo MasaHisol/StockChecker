@@ -20,6 +20,11 @@ def _parse_date(s):
         if len(str(s)) > 10 else date.fromisoformat(str(s))
 
 
+def _y(v):
+    """金額表示: 100 円未満は小数まで (例: 1.87)、それ以上は整数。"""
+    return f"{v:,.2f}".rstrip("0").rstrip(".") if abs(v) < 100 else f"{v:,.0f}"
+
+
 def evaluate(material, latest, previous, rules, today=None):
     """material / latest / previous は dict 互換 (sqlite3.Row 可)。"""
     today = today or date.today()
@@ -46,19 +51,19 @@ def evaluate(material, latest, previous, rules, today=None):
                 direction = "上昇" if pct > 0 else "下落"
                 out.append(Finding(
                     "price_change",
-                    f"単価が前回 {previous['unit_price']:,.0f} → {price:,.0f} 円 ({pct:+.1f}%) に{direction}しています。",
+                    f"単価が前回 {_y(previous['unit_price'])} → {_y(price)} 円 ({pct:+.1f}%) に{direction}しています。",
                     True))
         budget = material["budget_unit_price"]
         if budget and price > budget:
             out.append(Finding(
                 "over_budget",
-                f"一般単価 {price:,.0f} 円が予算単価 {budget:,.0f} 円を超過しています。",
+                f"一般単価 {_y(price)} 円が予算単価 {_y(budget)} 円を超過しています。",
                 True))
         amount = price * qty
         if amount >= rules.high_value_amount:
             out.append(Finding(
                 "high_value",
-                f"概算金額 {amount:,.0f} 円が基準 {rules.high_value_amount:,.0f} 円以上のため、正式見積が必要です。",
+                f"概算金額 {_y(amount)} 円が基準 {_y(rules.high_value_amount)} 円以上のため、正式見積が必要です。",
                 True))
 
     if latest is not None:
@@ -83,6 +88,10 @@ def evaluate(material, latest, previous, rules, today=None):
                 f"流通在庫 {stock} が必要数 {qty} に不足しています。",
                 True))
     return out
+
+
+RULE_KINDS = {"custom_item", "no_price", "stale_price", "price_change", "over_budget",
+              "high_value", "lead_time_over", "lead_time_tight", "stock_short"}
 
 
 def needs_quote(findings):

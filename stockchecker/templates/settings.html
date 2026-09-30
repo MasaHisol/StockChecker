@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head"><div><h1>設定</h1><div class="sub">チーム全体に適用される設定です (管理者のみ)。</div></div>
+  <a class="btn ghost" href="{{ url_for('templates_page') }}">メールテンプレートを編集</a></div>
+<form method="post">
+<div class="grid g2">
+<div class="card">
+  <h2>一括取得の速度 (アクセス制限の対策)</h2>
+  <p class="small muted" style="margin-top:0">同じサイトへは下の間隔を空けて 1 件ずつアクセスします。制限 (HTTP 429 やエラーページ) を受けたら待ってから再試行し、その回はそのサイトの間隔を自動で倍に伸ばします。</p>
+  <div class="form-grid">
+    <div><label class="f">標準のアクセス間隔 (秒)</label><input name="fetch_default_delay" type="number" min="0" value="{{ fetch.fetch_default_delay }}"></div>
+    <div><label class="f">制限時の再試行回数</label><input name="fetch_max_retries" type="number" min="0" max="10" value="{{ fetch.fetch_max_retries }}"></div>
+    <div><label class="f">制限時の最初の待ち時間 (秒・回ごとに倍)</label><input name="fetch_backoff_seconds" type="number" min="0" value="{{ fetch.fetch_backoff_seconds }}"></div>
+  </div>
+  <label class="f">サイトごとの間隔 (1 行に「ドメイン=秒」)</label>
+  <textarea name="fetch_domain_delays" style="min-height:90px;font-family:ui-monospace,monospace">{{ fetch.fetch_domain_delays }}</textarea>
+  <div class="hint">例: <code>misumi-ec.com=10</code> はミスミへのアクセスを 10 秒おきにします。エラーが続くサイトは数値を大きくしてください。</div>
+</div>
+<div class="card">
+  <h2>価格・納期の確認とリマインド</h2>
+  <div class="form-grid">
+    <div><label class="f">既定の確認周期 (日・0 で無効)</label><input name="confirm_interval_days" type="number" min="0" value="{{ rem.confirm_interval_days }}">
+      <div class="hint">URL の無い部材 (特注品・メール発注) に適用。部材ごとに変更できます。</div></div>
+    <div><label class="f">督促のリマインドまで (日)</label><input name="followup_days" type="number" min="1" value="{{ rem.followup_days }}">
+      <div class="hint">見積依頼・確認メールの送信後、この日数回答が無いとリマインド。</div></div>
+    <div><label class="f">回答期限 (今日から + 日)</label><input name="reply_days" type="number" min="1" value="{{ rem.reply_days }}">
+      <div class="hint">文面の「◯月◯日までにご回答を」に入る日付。</div></div>
+  </div>
+  <label class="inline" style="margin-top:14px"><input type="checkbox" name="notify_owner" value="1" {{ 'checked' if rem.notify_owner == '1' }}> リマインドを担当者にメール (と Slack/Teams) で通知する</label><br>
+  <label class="inline" style="margin-top:8px"><input type="checkbox" name="auto_confirm_enabled" value="1" {{ 'checked' if rem.auto_confirm_enabled == '1' }}> 確認期限が来たら、確認メールを<b>自動送信</b>する (部材ごとに「自動送信」を ON にしたもののみ)</label><br>
+  <label class="inline" style="margin-top:8px"><input type="checkbox" name="auto_followup_enabled" value="1" {{ 'checked' if rem.auto_followup_enabled == '1' }}> 回答が無いとき、督促メールを<b>自動送信</b>する (1 通につき 1 回まで)</label>
+  <div class="hint">自動送信にはメールサーバー (SMTP) の設定が必要です{% if not settings.smtp_host %} — <b style="color:var(--crit)">現在 SMTP が未設定のため、自動送信は行わず担当者へのリマインドになります</b>{% endif %}。リマインドの確認は {{ settings.reminder_interval_minutes }} 分ごとに行います。</div>
+</div>
+</div>
+<p><button>設定を保存</button></p>
+</form>
+
+<div class="card">
+  <h2>チームで共有する</h2>
+  {% if lan_urls %}
+  <p style="margin-top:0">同じ社内ネットワークのメンバーは、ブラウザで次のアドレスを開くとこのアプリを使えます。</p>
+  {% for u in lan_urls %}<div><code style="font-size:14px">{{ u }}</code></div>{% endfor %}
+  <p class="small muted">メンバーは「チーム・仕入先」で追加し、ログイン用のメールアドレスとパスワードを伝えてください。このアプリを起動した PC の電源が入っている間だけ使えます。</p>
+  {% else %}
+  <p class="small" style="margin-top:0">現在はこの PC からのみ使える設定です。チームで使うには、常時起動している PC (または社内サーバー) で <code>stockchecker.ini</code> の <code>[app]</code> に <code>share = 1</code> を設定して再起動してください。起動時に表示されるアドレスをメンバーに伝えます (初回は Windows のファイアウォールの許可が必要です)。</p>
+  {% endif %}
+</div>
+{% endblock %}

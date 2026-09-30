@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head"><div>
+  <div class="sub"><a href="{{ url_for('settings_page') }}">設定</a> / メールテンプレート</div>
+  <h1>メールテンプレート</h1><div class="sub">ワンタッチで作る下書きの文面です。{ } で囲んだ部分に部材や仕入先の情報が入ります。</div></div></div>
+<div class="tabs">{% for k, label in kind_labels.items() if k != 'alert' %}<a href="{{ url_for('templates_page', kind=k) }}" class="{{ 'on' if k == kind }}">{{ label }}</a>{% endfor %}</div>
+<div class="split">
+<form method="post" class="card">
+  <label class="f">件名</label><input name="subject" value="{{ subject }}" required>
+  <label class="f">本文</label><textarea class="mail" name="body" required>{{ body }}</textarea>
+  <div class="row" style="margin-top:12px"><button name="action" value="save">保存</button>
+    {% if custom %}<button name="action" value="reset" class="ghost" onclick="return confirm('既定の文面に戻しますか？')">既定の文面に戻す</button>
+    <span class="small muted">最終更新: {{ custom.updated_at[:16] }}{% if custom.user_name %} ({{ custom.user_name }}){% endif %}</span>{% else %}<span class="small muted">既定の文面を表示しています</span>{% endif %}</div>
+</form>
+<div class="card"><h2>差し込みできる項目</h2>
+  <dl class="dl">{% for k, v in placeholders.items() %}<dt><code>{{ k }}</code></dt><dd class="small">{{ v }}</dd>{% endfor %}</dl>
+  <p class="hint">{items} には選んだ部材の品名・品番・メーカー・仕様・数量・希望納期が入ります。価格・納期の確認では前回の単価・納期、注文では単価・金額も入ります。</p>
+</div>
+</div>
+{% endblock %}

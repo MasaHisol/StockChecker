@@ -1,84 +1,110 @@
 {% extends "base.html" %}
 {% block body %}
-{% set n_quote = rows|selectattr('status','equalto','quote')|list|length %}
-{% set n_warn = rows|selectattr('status','equalto','warn')|list|length %}
-{% set n_ok = rows|selectattr('status','equalto','ok')|list|length %}
 <div class="page-head">
-  <div><h1>ダッシュボード</h1><div class="sub">最終取得 {{ last_fetch or '未取得' }} ・ 取得元 {{ sources|selectattr(1)|list|length }} 件有効 ・ 見積依頼の自動送信 {{ 'ON' if settings.auto_send_enabled else 'OFF' }}</div></div>
-  <form method="post" action="{{ url_for('run_checks') }}" class="row">
-    <button>
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
-      今すぐ価格取得＆チェック</button>
-  </form>
+  <div>
+    <h1>ホーム</h1>
+    <div class="sub">
+      {% if last_job %}前回の一括取得: {{ last_job.started_at[:16] }}{% if last_job.user_name %} ({{ last_job.user_name }}){% endif %}{% else %}まだ一括取得をしていません{% endif %}
+      ・ URL 登録済み {{ web_targets }} 件 / 全 {{ rows|length }} 件
+    </div>
+  </div>
+  <div class="row">
+    <div class="seg"><a href="{{ url_for('index') }}" class="{{ 'on' if not mine }}">全員</a><a href="{{ url_for('index', mine=1) }}" class="{{ 'on' if mine }}">自分の担当</a></div>
+    <form method="post" action="{{ url_for('fetch_start') }}">
+      <button class="lg" data-busy="開始しています…" {{ 'disabled' if running_job }}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+        価格・納期を一括取得</button>
+    </form>
+  </div>
 </div>
 
 <div class="kpis">
-  <a class="kpi" href="#materials" data-filter="quote"><div class="label"><span class="dot crit"></span>見積が必要</div><div class="value">{{ n_quote }}<small>件</small></div></a>
-  <a class="kpi" href="#materials" data-filter="warn"><div class="label"><span class="dot warn"></span>要注意</div><div class="value">{{ n_warn }}<small>件</small></div></a>
-  <a class="kpi" href="#materials" data-filter="ok"><div class="label"><span class="dot good"></span>問題なし</div><div class="value">{{ n_ok }}<small>件</small></div></a>
-  <a class="kpi" href="{{ url_for('emails') }}"><div class="label"><span class="dot info"></span>未送信の下書き</div><div class="value">{{ drafts }}<small>通</small></div></a>
+  <a class="kpi" href="#todo-quote"><div class="label"><span class="dot crit"></span>見積が必要</div><div class="value">{{ quote|length }}<small>件</small></div></a>
+  <a class="kpi" href="#todo-confirm"><div class="label"><span class="dot warn"></span>価格・納期の確認時期</div><div class="value">{{ confirm|length }}<small>件</small></div></a>
+  <a class="kpi" href="#todo-reply"><div class="label"><span class="dot info"></span>回答待ち (督促時期)</div><div class="value">{{ noreply|length }}<small>件</small></div></a>
+  <a class="kpi" href="{{ url_for('emails') }}"><div class="label"><span class="dot warn"></span>未送信の下書き</div><div class="value">{{ drafts|length }}<small>通</small></div></a>
 </div>
 
-<div class="card flush" id="materials">
-  <div class="toolbar">
-    <h2 style="margin:0 12px 0 0">部材</h2>
-    <div class="seg" id="seg">
-      <button class="on" data-f="all">すべて {{ rows|length }}</button>
-      <button data-f="quote">要見積 {{ n_quote }}</button>
-      <button data-f="warn">注意 {{ n_warn }}</button>
-      <button data-f="ok">OK {{ n_ok }}</button>
-    </div>
-    <input type="search" id="q" placeholder="品番・品名・担当で絞り込み" style="margin-left:auto">
+<div class="split">
+<div>
+  <div class="card flush" id="todo-quote">
+    <div class="card-head"><h2>見積が必要な部材</h2><a class="small" href="{{ url_for('materials', status='quote') }}">一覧で見る</a></div>
+    {% if quote %}<ul class="todo">
+    {% for r in quote[:20] %}{% set m = r.m %}
+      <li><div class="ic crit">!</div>
+        <div class="body"><a href="{{ url_for('material_detail', mid=m.id) }}" class="strong">{{ m.name }}</a> <span class="muted small">{{ m.part_number }}{% if m.owner_name %} ・ {{ m.owner_name }}{% endif %}</span>
+          <ul class="reasons">{% for f in r.findings if f.needs_quote %}<li>{{ f.message }}</li>{% endfor %}</ul></div>
+        <div class="acts">
+          {% if r.pending %}<a class="pill {{ 'warn' if r.pending.status == 'draft' else 'info' }}" href="{{ url_for('email_edit', eid=r.pending.id) }}">{{ '下書きあり' if r.pending.status == 'draft' else '回答待ち' }}</a>
+          {% elif m.preferred_supplier_id %}<form method="post" action="{{ url_for('material_mail', mid=m.id, kind='rfq') }}"><button class="sm">見積依頼を作成</button></form>
+          {% else %}<a class="btn ghost sm" href="{{ url_for('material_detail', mid=m.id) }}">開く</a>{% endif %}
+        </div></li>
+    {% endfor %}</ul>
+    {% else %}<div class="empty">見積が必要な部材はありません。</div>{% endif %}
   </div>
-  <div class="scroll">
-  <table id="mt">
-  <thead><tr><th>状態</th><th>品番 / 品名</th><th>担当</th><th class="num">数量</th><th>必要納期</th><th class="num">一般単価</th><th class="num">一般納期</th><th>出典</th></tr></thead>
-  <tbody>
-  {% for r in rows %}{% set m = r.m %}
-  <tr data-status="{{ r.status }}" data-text="{{ (m.part_number ~ ' ' ~ m.name ~ ' ' ~ (m.owner_name or ''))|lower }}">
-    <td>{% if r.status == 'quote' %}<span class="pill crit">● 要見積</span>{% elif r.status == 'warn' %}<span class="pill warn">▲ 注意</span>{% else %}<span class="pill good">✓ OK</span>{% endif %}</td>
-    <td><a href="{{ url_for('material_detail', mid=m.id) }}"><b>{{ m.part_number }}</b></a><div class="muted small">{{ m.name }}</div>
-      {% if r.findings %}<ul class="reasons">{% for f in r.findings %}<li>{{ f.message }}</li>{% endfor %}</ul>{% endif %}</td>
-    <td class="nowrap">{{ m.owner_name or '—' }}</td>
-    <td class="num">{{ '{:,}'.format(m.quantity) }} <span class="muted">{{ m.unit }}</span></td>
-    <td class="nowrap">{{ m.required_date or '—' }}{% if r.days_left is not none %}<div class="small {{ 'muted' if r.days_left > 14 else '' }}" style="{{ 'color:var(--crit)' if r.days_left <= 14 }}">あと {{ r.days_left }} 日</div>{% endif %}</td>
-    <td class="num">{% if r.latest and r.latest.unit_price is not none %}¥{{ r.latest.unit_price|yen }}{% if r.delta is not none %}<div class="small" style="color:{{ 'var(--crit)' if r.delta > 0 else 'var(--good)' }}">{{ '▲' if r.delta > 0 else '▼' }} {{ '%.1f'|format(r.delta|abs) }}%</div>{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
-    <td class="num">{% if r.latest and r.latest.lead_time_days is not none %}{{ r.latest.lead_time_days }} 日{% else %}<span class="muted">—</span>{% endif %}</td>
-    <td class="small">{% if r.latest %}{% if r.latest.url %}<a href="{{ r.latest.url }}" target="_blank" rel="noopener">{{ r.latest.vendor or source_labels.get(r.latest.source, r.latest.source) }}</a>{% else %}{{ r.latest.vendor or source_labels.get(r.latest.source, r.latest.source) }}{% endif %}<div class="muted">{{ r.latest.observed_at[:10] }}</div>{% else %}<span class="muted">未取得</span>{% endif %}</td>
-  </tr>
-  {% endfor %}
-  </tbody>
-  </table>
+
+  <div class="card flush" id="todo-confirm">
+    <div class="card-head"><h2>価格・納期の確認時期</h2><span class="small muted">特注品・メール発注の部材は定期的に仕入先へ確認します</span></div>
+    {% if confirm %}<ul class="todo">
+    {% for r in confirm %}{% set m = r.m %}{% set a = r.reminders|selectattr('kind','equalto','confirm_due')|first %}
+      <li><div class="ic warn">↻</div>
+        <div class="body"><a href="{{ url_for('material_detail', mid=m.id) }}" class="strong">{{ m.name }}</a> <span class="muted small">{{ m.part_number }}{% if m.supplier_name %} ・ {{ m.supplier_name }}{% endif %}</span>
+          <div class="small" style="color:var(--ink-2)">{{ a.message }}</div></div>
+        <div class="acts">
+          {% if m.preferred_supplier_id %}<form method="post" action="{{ url_for('material_mail', mid=m.id, kind='confirm') }}"><button class="sm">確認メールを作成</button></form>{% endif %}
+          <form method="post" action="{{ url_for('mark_confirmed', mid=m.id) }}"><button class="ghost sm" title="電話などで確認できた場合">確認済み</button></form>
+        </div></li>
+    {% endfor %}</ul>
+    {% else %}<div class="empty">確認時期の部材はありません。</div>{% endif %}
   </div>
-  {% if not rows %}<div class="empty">まだ部材が登録されていません。<br><a class="btn" href="{{ url_for('material_new') }}">最初の部材を登録</a></div>{% endif %}
-  <div class="empty" id="nohit" style="display:none">条件に合う部材はありません。</div>
+
+  <div class="card flush" id="todo-reply">
+    <div class="card-head"><h2>回答待ち・督促</h2><a class="small" href="{{ url_for('emails', tab='waiting') }}">回答待ちのメール</a></div>
+    {% if noreply %}<ul class="todo">
+    {% for r, a in noreply %}{% set m = r.m %}
+      <li><div class="ic info">✉</div>
+        <div class="body"><a href="{{ url_for('material_detail', mid=m.id) }}" class="strong">{{ m.name }}</a> <span class="muted small">{{ m.part_number }}</span>
+          <div class="small" style="color:var(--ink-2)">{{ a.message }}</div></div>
+        <div class="acts">
+          {% if a.ref_email_id %}<form method="post" action="{{ url_for('material_mail', mid=m.id, kind='followup') }}"><input type="hidden" name="email_id" value="{{ a.ref_email_id }}"><button class="sm">督促メールを作成</button></form>
+          <form method="post" action="{{ url_for('email_edit', eid=a.ref_email_id) }}"><input type="hidden" name="action" value="answered"><button class="ghost sm">回答あり</button></form>{% endif %}
+        </div></li>
+    {% endfor %}</ul>
+    {% else %}<div class="empty">督促が必要なメールはありません。</div>{% endif %}
+  </div>
+
+  {% if drafts %}
+  <div class="card flush">
+    <div class="card-head"><h2>未送信の下書き</h2><a class="small" href="{{ url_for('emails') }}">すべて</a></div>
+    <ul class="todo">{% for e in drafts[:8] %}
+      <li><div class="ic warn">✎</div><div class="body"><a href="{{ url_for('email_edit', eid=e.id) }}">{{ e.subject }}</a>
+        <div class="small muted">{{ kind_labels[e.kind] }} ・ {{ e.supplier_name or e.to_addr }} ・ {{ e.created_at[5:16] }}{% if e.auto %} ・ 自動作成{% endif %}</div></div>
+        <div class="acts"><a class="btn sm" href="{{ url_for('email_edit', eid=e.id) }}">確認して送信</a></div></li>
+    {% endfor %}</ul>
+  </div>{% endif %}
 </div>
 
-<div class="card flush">
-  <h2>未対応のアラート <span class="muted small">{{ alerts|length }} 件</span></h2>
-  {% if alerts %}
-  <div class="scroll"><table>
-  <thead><tr><th>発生</th><th>部材</th><th>内容</th><th>担当者への通知</th><th></th></tr></thead>
-  <tbody>
-  {% for a in alerts %}
-  <tr><td class="muted small nowrap">{{ a.created_at[5:16] }}</td><td class="nowrap"><a href="{{ url_for('material_detail', mid=a.material_id) }}">{{ a.part_number }}</a></td>
-  <td>{{ a.message }}</td><td class="small nowrap">{% if a.notified_at %}<span class="pill good">通知済</span>{% else %}<span class="pill off">未通知</span>{% endif %}</td>
-  <td><form method="post" action="{{ url_for('alert_resolve', aid=a.id) }}"><button class="ghost sm">対応済にする</button></form></td></tr>
-  {% endfor %}
-  </tbody></table></div>
-  {% else %}<div class="empty">未対応のアラートはありません。</div>{% endif %}
+<div>
+  <div class="card">
+    <div class="card-head"><h2>前回の一括取得</h2>{% if last_job %}<a class="small" href="{{ url_for('fetch_result', job_id=last_job.id) }}">結果の詳細</a>{% endif %}</div>
+    {% if last_job %}
+      <div class="row small" style="margin-bottom:6px">
+        {% if last_job.status == 'done' %}<span class="pill good">完了</span>{% elif last_job.status in ('running','cancelling') %}<span class="pill info">実行中</span>{% elif last_job.status == 'cancelled' %}<span class="pill off">中止</span>{% else %}<span class="pill crit">中断</span>{% endif %}
+        <span class="muted">{{ last_job.started_at[:16] }} 〜 {{ (last_job.finished_at or '')[11:16] }}</span></div>
+      <div class="small">{{ last_job.message or '' }}</div>
+      {% if job_errors %}<details style="margin-top:8px"><summary class="small" style="color:var(--crit)">取得できなかった部材 {{ job_errors|length }} 件</summary>
+        <ul class="reasons">{% for i in job_errors %}<li><a href="{{ url_for('material_detail', mid=i.material_id) }}">{{ i.part_number }}</a>: {{ i.message }}</li>{% endfor %}</ul></details>{% endif %}
+    {% else %}
+      <p class="small muted" style="margin:0">「価格・納期を一括取得」を押すと、URL を登録した全部材の価格・納期をまとめて取得します。サイトごとに間隔を空けて順番にアクセスするため、件数が多いと数分かかります。</p>
+    {% endif %}
+  </div>
+  <div class="card">
+    <h2>最近の動き</h2>
+    {% if activity %}<ul class="feed">{% for a in activity %}
+      <li><span class="t">{{ a.created_at[5:16] }}</span><span><b>{{ a.user_name or '自動' }}</b> {{ action_labels.get(a.action, a.action) }}{% if a.part_number %} <a href="{{ url_for('material_detail', mid=a.material_id) }}">{{ a.part_number }}</a>{% endif %}
+        {% if a.detail %}<div class="small muted">{{ a.detail }}</div>{% endif %}</span></li>
+    {% endfor %}</ul>{% else %}<div class="small muted">まだ操作はありません。</div>{% endif %}
+  </div>
 </div>
-
-<script>
-(function(){
-  var rows=[].slice.call(document.querySelectorAll('#mt tbody tr')),f='all',q='';
-  function apply(){var n=0;rows.forEach(function(r){var ok=(f==='all'||r.dataset.status===f)&&(!q||r.dataset.text.indexOf(q)>=0);r.style.display=ok?'':'none';if(ok)n++;});
-    document.getElementById('nohit').style.display=(rows.length&&!n)?'':'none';
-    [].forEach.call(document.querySelectorAll('#seg button'),function(b){b.classList.toggle('on',b.dataset.f===f);});}
-  function setF(v){f=v;apply();}
-  [].forEach.call(document.querySelectorAll('#seg button'),function(b){b.onclick=function(){setF(b.dataset.f)};});
-  [].forEach.call(document.querySelectorAll('.kpi[data-filter]'),function(k){k.onclick=function(){setF(k.dataset.filter)};});
-  document.getElementById('q').oninput=function(e){q=e.target.value.toLowerCase().trim();apply();};
-})();
-</script>
+</div>
 {% endblock %}

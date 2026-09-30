@@ -39,11 +39,19 @@ class Settings:
     yahoo_app_id: str = ""
     rakuten_app_id: str = ""
     page_watch: bool = True     # 商品ページ URL の巡回 (キー不要)
+    page_watch_render: bool = True  # 価格が見つからないときブラウザで表示して読み直す
     anthropic_api_key: str = ""
     # Web 検索 (Claude): off / fallback (API で見つからない部材のみ) / always
     web_search: str = "fallback"
     web_search_interval_days: int = 7   # 同じ部材を Web 検索する最短間隔 (費用抑制)
     rules: Rules = field(default_factory=Rules)
+    # チーム利用
+    auth: bool = True                  # ログインを必須にする
+    csrf: bool = True                  # フォーム送信の改ざん防止
+    background: bool = False           # リマインドの定期スキャンを動かす (launcher / serve で有効)
+    reminder_interval_minutes: int = 30
+    run_jobs_async: bool = True        # 一括取得を裏で実行する (テストでは同期)
+    lan_urls: list = field(default_factory=list)  # チームのメンバーが開く URL (表示用)
 
     @classmethod
     def from_env(cls):

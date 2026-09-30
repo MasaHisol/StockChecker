@@ -81,3 +81,71 @@ CREATE TABLE IF NOT EXISTS site_hints (
     label TEXT NOT NULL,
     tax TEXT                          -- incl (税込) / excl (税抜) / NULL
 );
+
+-- アプリ設定 (チームで共有する設定。管理者が画面から変更)
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+
+-- メールテンプレート (種別ごと。未登録なら既定の文面を使う)
+CREATE TABLE IF NOT EXISTS mail_templates (
+    kind TEXT PRIMARY KEY,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    updated_by INTEGER REFERENCES staff(id),
+    updated_at TEXT
+);
+
+-- 1 通のメールに含まれる部材 (まとめて依頼したメールの回答管理用)
+CREATE TABLE IF NOT EXISTS email_materials (
+    email_id INTEGER NOT NULL REFERENCES emails(id) ON DELETE CASCADE,
+    material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+    PRIMARY KEY (email_id, material_id)
+);
+
+-- 一括取得ジョブ
+CREATE TABLE IF NOT EXISTS fetch_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT NOT NULL DEFAULT 'running',   -- running / cancelling / done / cancelled / failed
+    total INTEGER NOT NULL DEFAULT 0,
+    done INTEGER NOT NULL DEFAULT 0,
+    ok INTEGER NOT NULL DEFAULT 0,
+    failed INTEGER NOT NULL DEFAULT 0,
+    skipped INTEGER NOT NULL DEFAULT 0,
+    current TEXT,
+    message TEXT,
+    started_by INTEGER REFERENCES staff(id),
+    started_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    finished_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS fetch_job_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER NOT NULL REFERENCES fetch_jobs(id) ON DELETE CASCADE,
+    material_id INTEGER REFERENCES materials(id) ON DELETE CASCADE,
+    status TEXT NOT NULL,                     -- ok / error / skipped
+    unit_price REAL,
+    lead_time_days INTEGER,
+    message TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+-- 操作履歴 (誰がいつ何をしたか)
+CREATE TABLE IF NOT EXISTS activity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER REFERENCES staff(id),
+    material_id INTEGER REFERENCES materials(id) ON DELETE CASCADE,
+    action TEXT NOT NULL,
+    detail TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+-- 部材ごとのコメント (チーム内の連絡)
+CREATE TABLE IF NOT EXISTS comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES staff(id),
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);

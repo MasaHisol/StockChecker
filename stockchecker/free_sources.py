@@ -5,13 +5,11 @@
 - YahooShoppingProvider: Yahoo!ショッピング 商品検索 API v3 (無料の Client ID が必要)
 - RakutenProvider     : 楽天市場 商品検索 API (無料のアプリ ID が必要)
 """
-import html
-import json
 import re
 import urllib.parse
 import urllib.request
 
-from .online import _http_json, _pn_match, _to_number
+from .online import _http_json, _to_number
 from . import pagereader
 from .providers import PriceProvider
 

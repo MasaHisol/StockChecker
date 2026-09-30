@@ -64,6 +64,28 @@ class FetchError(Exception):
     pass
 
 
+def short(e, n=160):
+    """例外メッセージを 1 行に短くする (ブラウザのエラーは複数行の案内文を含むため)。"""
+    s = str(e).strip().splitlines()
+    return (s[0] if s else type(e).__name__)[:n]
+
+
+class RateLimited(FetchError):
+    """サイト側のアクセス制限 (429 / 503 / 制限ページ) を受けた。時間を置いて再試行する。"""
+
+
+BLOCK_TITLE = re.compile(r"System Error|Access Denied|Too Many Requests|Forbidden|"
+                         r"アクセスが集中|アクセス制限|しばらく時間をおいて|Just a moment", re.I)
+
+
+def looks_blocked(html):
+    """制限・エラーページ (小さなページで題名がエラー) かどうか。"""
+    if not html or len(html) > 20000:
+        return False
+    m = re.search(r"<title[^>]*>(.*?)</title>", html, re.S | re.I)
+    return bool(m and BLOCK_TITLE.search(m.group(1))) or len(html) < 1200 and bool(BLOCK_TITLE.search(html))
+
+
 # ------------------------------------------------------------------ 取得
 def fetch_static(url, timeout=20):
     req = urllib.request.Request(url, headers=HEADERS)
@@ -72,9 +94,11 @@ def fetch_static(url, timeout=20):
             raw = r.read()
             charset = r.headers.get_content_charset()
     except urllib.error.HTTPError as e:
+        if e.code in (429, 503):
+            raise RateLimited(f"サイトからアクセス制限を受けました (HTTP {e.code})") from e
         raise FetchError(f"サイトが HTTP {e.code} を返しました") from e
     except (urllib.error.URLError, TimeoutError, OSError) as e:
-        raise FetchError(f"サイトに接続できません ({getattr(e, 'reason', e)})") from e
+        raise FetchError(f"サイトに接続できません ({short(getattr(e, 'reason', e))})") from e
     if not charset:
         m = re.search(rb'charset=["\']?([\w\-]+)', raw[:4000])
         charset = m.group(1).decode() if m else "utf-8"
@@ -84,56 +108,129 @@ def fetch_static(url, timeout=20):
 PRICE_JS = r"""() => /[¥￥]\s?[0-9]|[0-9,]+\s?円/.test(document.body ? document.body.innerText : "")"""
 
 
-def fetch_rendered(url, timeout_ms=30000, headless=True):
-    """PC にある Edge / Chrome (無ければ Playwright の Chromium) で表示した HTML を返す。
+class BrowserSession:
+    """PC の Edge / Chrome (無ければ Playwright の Chromium) を裏で動かしてページを表示する。
 
-    headless=False のときは画面外にウィンドウを出して通常のブラウザとして開く
-    (自動アクセス対策で画面なしブラウザを拒否するサイト向け)。
+    一括取得ではブラウザを起動したまま使い回す (with 文で使う)。
+    画面なしブラウザを拒否されたサイトは、画面外ウィンドウの通常ブラウザで開き直し、
+    以後そのサイトは通常ブラウザを使う。
     """
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError as e:
-        raise FetchError("ブラウザ表示機能が利用できません") from e
-    import os
-    last = None
-    exe = os.environ.get("SC_BROWSER_PATH")  # 任意: 使うブラウザの実行ファイルを明示
-    args = ["--disable-blink-features=AutomationControlled"]
-    if not headless:
-        args += ["--window-position=-32000,-32000", "--window-size=1280,900"]
-    with sync_playwright() as p:
+
+    def __init__(self, timeout_ms=30000):
+        self.timeout_ms = timeout_ms
+        self._pw = None
+        self._browsers = {}          # headless(bool) -> (browser, context)
+        self._headed_domains = set()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+    def close(self):
+        for b, _ in self._browsers.values():
+            try:
+                b.close()
+            except Exception:
+                pass
+        self._browsers.clear()
+        if self._pw:
+            try:
+                self._pw.stop()
+            except Exception:
+                pass
+            self._pw = None
+
+    def _context(self, headless):
+        if headless in self._browsers:
+            return self._browsers[headless][1]
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError as e:
+            raise FetchError("ブラウザ表示機能が利用できません") from e
+        import os
+        if self._pw is None:
+            self._pw = sync_playwright().start()
+        exe = os.environ.get("SC_BROWSER_PATH")  # 任意: 使うブラウザの実行ファイルを明示
+        args = ["--disable-blink-features=AutomationControlled"]
+        if not headless:
+            args += ["--window-position=-32000,-32000", "--window-size=1280,900"]
+        last = None
         for channel in (["exe"] if exe else []) + ["msedge", "chrome", None]:
             opts = {"headless": headless, "args": args}
             try:
                 if channel == "exe":
-                    b = p.chromium.launch(executable_path=exe, **opts)
+                    b = self._pw.chromium.launch(executable_path=exe, **opts)
                 elif channel:
-                    b = p.chromium.launch(channel=channel, **opts)
+                    b = self._pw.chromium.launch(channel=channel, **opts)
                 else:
-                    b = p.chromium.launch(**opts)
+                    b = self._pw.chromium.launch(**opts)
+                break
             except Exception as e:
                 last = e
-                continue
+        else:
+            raise FetchError(f"Edge / Chrome を起動できませんでした ({short(last)})")
+        ctx_opts = {"locale": "ja-JP", "viewport": {"width": 1280, "height": 900}}
+        if headless:  # 画面なしブラウザの識別文字列を通常のものに置き換える
+            ctx_opts["user_agent"] = HEADERS["User-Agent"]
+        ctx = b.new_context(**ctx_opts)
+        ctx.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
+        self._browsers[headless] = (b, ctx)
+        return ctx
+
+    def render(self, url, headless=None):
+        """表示後の HTML を返す。制限ページなら RateLimited。"""
+        dom = domain(url)
+        modes = [headless] if headless is not None else \
+            ([False] if dom in self._headed_domains else [True, False])
+        html, err = None, None
+        for mode in modes:
             try:
-                ctx_opts = {"locale": "ja-JP", "viewport": {"width": 1280, "height": 900}}
-                if headless:  # 画面なしブラウザの識別文字列を通常のものに置き換える
-                    ctx_opts["user_agent"] = HEADERS["User-Agent"]
-                ctx = b.new_context(**ctx_opts)
-                ctx.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
-                page = ctx.new_page()
-                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-                try:
-                    page.wait_for_load_state("networkidle", timeout=10000)
-                except Exception:
-                    pass
-                try:  # 価格が後から読み込まれるページは金額が表示されるまで待つ
-                    page.wait_for_function(PRICE_JS, timeout=15000)
-                    page.wait_for_timeout(1500)
-                except Exception:
-                    pass
-                return page.content()
-            finally:
-                b.close()
-    raise FetchError(f"Edge / Chrome を起動できませんでした ({last})")
+                html = self._render_once(url, mode)
+            except FetchError as e:
+                err = e
+                continue
+            if not looks_blocked(html):
+                if mode is False:
+                    self._headed_domains.add(dom)
+                return html
+        if html is not None:
+            raise RateLimited("サイトからアクセス制限のページが返されました")
+        raise err or FetchError("ページを表示できませんでした")
+
+    def _render_once(self, url, headless):
+        page = self._context(headless).new_page()
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=self.timeout_ms)
+            try:
+                page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                pass
+            try:  # 価格が後から読み込まれるページは金額が表示されるまで待つ
+                page.wait_for_function(PRICE_JS, timeout=15000)
+                page.wait_for_timeout(1500)
+            except Exception:
+                pass
+            return page.content()
+        except FetchError:
+            raise
+        except Exception as e:
+            raise FetchError(f"ページを表示できませんでした ({short(e, 120)})") from e
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
+
+
+PRICE_JS = r"""() => /[¥￥]\s?[0-9]|[0-9,]+\s?円/.test(document.body ? document.body.innerText : "")"""
+
+
+def fetch_rendered(url, timeout_ms=30000, headless=True):
+    """1 ページだけブラウザで表示して HTML を返す (制限ページも判定せずそのまま返す)。"""
+    with BrowserSession(timeout_ms) as s:
+        return s._render_once(url, headless)
 
 
 # ------------------------------------------------------------------ 解析
@@ -349,13 +446,19 @@ def parse(html, url="", hint=None):
     return info
 
 
-def read(url, hint=None, allow_render=True):
-    """URL を読み取り PageInfo を返す。価格が見つからなければブラウザ表示で再挑戦する。"""
+def read(url, hint=None, allow_render=True, session=None):
+    """URL を読み取り PageInfo を返す。価格が見つからなければブラウザ表示で再挑戦する。
+
+    session: 使い回す BrowserSession (省略時はその場で起動して閉じる)。
+    サイトの制限を受けた場合は RateLimited を送出する (呼び出し側で間隔を空けて再試行)。
+    """
     if not re.match(r"https?://", url or ""):
         raise FetchError("URL は http:// または https:// で始まる必要があります")
     err, best = None, None
     try:
         html = fetch_static(url)
+        if looks_blocked(html):
+            raise RateLimited("サイトからアクセス制限のページが返されました")
         best = parse(html, url, hint)
         best.html = html
         if best.unit_price is not None:
@@ -366,20 +469,23 @@ def read(url, hint=None, allow_render=True):
         if best is None:
             raise err
         return best
-    for headless in (True, False):
-        try:
-            html = fetch_rendered(url, headless=headless)
-        except FetchError as e:
-            err = err or e
-            continue
-        r = parse(html, url, hint)
-        r.rendered, r.html = True, html
-        if best is None or r.unit_price is not None or len(r.candidates) > len(best.candidates):
-            best = r
-        if r.unit_price is not None or r.candidates:
-            break
-    if best is None:
-        raise FetchError(f"{err}。ブラウザでの表示も失敗しました")
+    own = session is None
+    session = session or BrowserSession()
+    try:
+        html = session.render(url)
+    except RateLimited:
+        raise
+    except FetchError as e:
+        if best is None:
+            raise FetchError(f"{err}。ブラウザでの表示も失敗しました: {e}") from e
+        return best
+    finally:
+        if own:
+            session.close()
+    r = parse(html, url, hint)
+    r.rendered, r.html = True, html
+    if best is None or r.unit_price is not None or len(r.candidates) >= len(best.candidates):
+        return r
     return best
 
 

@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="csrf" content="{{ csrf_token }}"><title>{% block title %}部材トラッカー{% endblock %}</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+<style>.auth{max-width:400px;margin:9vh auto;padding:0 16px}.auth .brand{display:flex;gap:10px;align-items:center;font-weight:700;font-size:18px;margin-bottom:18px}</style>
+</head><body><div class="auth">
+<div class="brand"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/></svg>部材トラッカー</div>
+{% for cat, m in get_flashed_messages(with_categories=true) %}<div class="flash {{ 'error' if cat == 'error' }}">{{ m }}</div>{% endfor %}
+{% block body %}{% endblock %}
+</div><script src="{{ url_for('static', filename='app.js') }}"></script></body></html>

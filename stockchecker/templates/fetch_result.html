@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head"><div>
+  <div class="sub"><a href="{{ url_for('index') }}">ホーム</a> / 一括取得の結果</div>
+  <h1>一括取得の結果</h1>
+  <div class="sub">{{ j.started_at[:16] }} 〜 {{ (j.finished_at or '実行中')[:16] }}{% if j.user_name %} ・ 実行: {{ j.user_name }}{% endif %}</div></div>
+  <form method="post" action="{{ url_for('fetch_start') }}">{% for i in items if i.status == 'error' %}<input type="hidden" name="ids" value="{{ i.material_id }}">{% endfor %}
+    {% if items|selectattr('status','equalto','error')|list %}<button class="ghost" {{ 'disabled' if running_job }}>失敗した部材だけ再取得</button>{% endif %}</form>
+</div>
+<div class="kpis">
+  <div class="kpi"><div class="label"><span class="dot good"></span>取得できた</div><div class="value">{{ j.ok }}<small>件</small></div></div>
+  <div class="kpi"><div class="label"><span class="dot crit"></span>失敗</div><div class="value">{{ j.failed }}<small>件</small></div></div>
+  <div class="kpi"><div class="label"><span class="dot info"></span>対象外 (URL なし)</div><div class="value">{{ j.skipped }}<small>件</small></div></div>
+</div>
+{% if j.message %}<div class="card small">{{ j.message }}</div>{% endif %}
+<div class="card flush"><div class="scroll"><table>
+  <thead><tr><th>結果</th><th>部材</th><th class="num">単価</th><th class="num">納期</th><th>メッセージ</th></tr></thead>
+  <tbody>{% for i in items %}
+  <tr><td>{% if i.status == 'ok' %}<span class="pill good">✓ 取得</span>{% elif i.status == 'error' %}<span class="pill crit">✕ 失敗</span>{% else %}<span class="pill off">対象外</span>{% endif %}</td>
+    <td>{% if i.material_id %}<a href="{{ url_for('material_detail', mid=i.material_id) }}"><b>{{ i.part_number }}</b></a> <span class="muted small">{{ i.name }}</span>{% endif %}</td>
+    <td class="num">{{ '¥' ~ (i.unit_price|yen) if i.unit_price is not none else '—' }}</td>
+    <td class="num">{{ (i.lead_time_days ~ ' 日') if i.lead_time_days is not none else '—' }}</td>
+    <td class="small">{{ i.message or '' }}</td></tr>
+  {% endfor %}</tbody></table></div>
+  {% if not items %}<div class="empty">まだ結果はありません。</div>{% endif %}</div>
+{% endblock %}

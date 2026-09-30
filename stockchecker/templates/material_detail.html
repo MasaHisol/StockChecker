@@ -1,43 +1,60 @@
 {% extends "base.html" %}
 {% block body %}
 {% set nq = findings|selectattr('needs_quote')|list|length %}
+{% set urls = (m.watch_urls or '').splitlines()|select|list %}
+{% set interval, base, due = confirm %}
 <div class="page-head">
   <div>
-    <div class="sub"><a href="{{ url_for('index') }}">ダッシュボード</a> / 部材</div>
+    <div class="sub"><a href="{{ url_for('materials') }}">部材一覧</a> / 部材</div>
     <h1>{{ m.name }}</h1>
-    <div class="sub">{{ m.part_number }}{% if m.maker %} ・ {{ m.maker }}{% endif %}{% if m.custom_item %} ・ <span class="pill info">特注品</span>{% endif %}</div>
+    <div class="sub">{{ m.part_number }}{% if m.maker %} ・ {{ m.maker }}{% endif %}{% if m.spec %} ・ {{ m.spec }}{% endif %}
+      {% if m.custom_item %} <span class="pill info">特注品</span>{% endif %}
+      {% if urls %} <span class="pill info">ネットで取得</span>{% else %} <span class="pill off">メールで確認</span>{% endif %}</div>
   </div>
   <div class="row">
-    <form method="post" action="{{ url_for('fetch_now', mid=m.id) }}"><button>ネットで最新価格を取得</button></form>
+    {% if urls %}<form method="post" action="{{ url_for('fetch_now', mid=m.id) }}"><button data-busy="取得中…">ネットで最新価格を取得</button></form>{% endif %}
     <a class="btn ghost" href="{{ url_for('material_edit', mid=m.id) }}">編集</a>
     <form method="post" action="{{ url_for('material_delete', mid=m.id) }}" onsubmit="return confirm('この部材を一覧から外しますか？')"><button class="danger">無効化</button></form>
   </div>
 </div>
 
-<div class="card" style="border-left:4px solid {{ 'var(--crit)' if nq else ('var(--warn)' if findings else 'var(--good)') }}">
-  <div class="row" style="justify-content:space-between">
-    <div>{% if nq %}<span class="pill crit">● 見積が必要です</span>{% elif findings %}<span class="pill warn">▲ 注意があります</span>{% else %}<span class="pill good">✓ 問題ありません</span>{% endif %}</div>
-    {% if nq and m.preferred_supplier_id %}<form method="post" action="{{ url_for('make_rfq', mid=m.id) }}"><input type="hidden" name="supplier_id" value="{{ m.preferred_supplier_id }}"><button class="sm">主仕入先に見積依頼を作成</button></form>{% endif %}
-  </div>
-  {% if findings %}<ul class="reasons" style="font-size:13px;margin-top:10px">{% for f in findings %}<li>{{ f.message }}</li>{% endfor %}</ul>{% endif %}
+{% if findings or alerts %}
+<div class="card" style="border-left:4px solid {{ 'var(--crit)' if nq else 'var(--warn)' }}">
+  {% if nq %}<span class="pill crit">● 見積が必要です</span>{% else %}<span class="pill warn">▲ 確認事項があります</span>{% endif %}
+  <ul class="reasons" style="font-size:13px;margin-top:8px">
+    {% for f in findings %}<li>{{ f.message }}</li>{% endfor %}
+    {% for a in alerts if a.kind in ('confirm_due','no_reply') %}<li>{{ a.message }}</li>{% endfor %}
+  </ul>
 </div>
+{% endif %}
 
-<form method="post" action="{{ url_for('watch_url', mid=m.id) }}" class="card" id="watch">
-  <h2>商品ページの URL を貼り付けて価格を追跡</h2>
-  <div class="row"><input name="url" type="url" required placeholder="https://www.monotaro.com/g/...  /  https://jp.misumi-ec.com/vona2/detail/..." style="flex:1;min-width:240px">
-    <button onclick="this.textContent='読み取り中…'">追跡する</button></div>
-  <div class="hint">価格を自動で読み取れない場合は、ページ内の金額一覧から選ぶだけで設定できます (サイトごとに記憶)。以後、定期チェックで自動更新されます。</div>
-  {% set urls = (m.watch_urls or '').splitlines()|select|list %}
-  {% if urls %}<table style="margin-top:10px"><tbody>{% for u in urls %}<tr>
-    <td class="small" style="word-break:break-all;padding-left:0"><a href="{{ u }}" target="_blank" rel="noopener">{{ u }}</a></td>
-    <td class="nowrap" style="text-align:right;padding-right:0"><a class="btn ghost sm" href="{{ url_for('watch_pick', mid=m.id, url=u) }}">価格の場所を指定し直す</a>
-      <form method="post" action="{{ url_for('watch_remove', mid=m.id) }}" style="display:inline"><input type="hidden" name="url" value="{{ u }}"><button class="danger sm">外す</button></form></td>
-  </tr>{% endfor %}</tbody></table>{% endif %}
+<form method="post" class="card" style="padding:14px 18px">
+  <div class="row" style="justify-content:space-between">
+    <div class="row"><b style="margin-right:4px">仕入先へ連絡</b>
+      <select name="supplier_id" style="width:auto;min-width:180px" aria-label="送り先">
+        {% if not m.preferred_supplier_id %}<option value="">送り先を選択</option>{% endif %}
+        {% for s in suppliers %}<option value="{{ s.id }}" {{ 'selected' if m.preferred_supplier_id == s.id }}>{{ s.name }}</option>{% endfor %}
+      </select></div>
+    <div class="row">
+      <button formaction="{{ url_for('material_mail', mid=m.id, kind='rfq') }}">見積依頼</button>
+      <button formaction="{{ url_for('material_mail', mid=m.id, kind='confirm') }}" class="ghost">価格・納期の確認</button>
+      <button formaction="{{ url_for('material_mail', mid=m.id, kind='order') }}" class="ghost">注文</button>
+      {% if waiting %}<input type="hidden" name="email_id" value="{{ waiting[0].id }}">
+      <button formaction="{{ url_for('material_mail', mid=m.id, kind='followup') }}" class="ghost">回答の督促</button>{% endif %}
+    </div>
+  </div>
+  <details style="margin-top:8px"><summary class="small muted">注文の数量・単価・納期を指定する</summary>
+    <div class="form-grid" style="max-width:640px">
+      <div><label class="f">数量</label><input name="quantity" type="number" value="{{ m.quantity }}"></div>
+      <div><label class="f">単価 (円・税抜)</label><input name="unit_price" value="{{ obs[0].unit_price if obs and obs[0].unit_price is not none else '' }}"></div>
+      <div><label class="f">納期</label><input name="delivery_date" type="date" value="{{ m.required_date or '' }}"></div>
+    </div></details>
+  <div class="hint">ボタンを押すとテンプレートから下書きを作成します。内容を確認・修正してから送信してください。{% if not suppliers %} 先に<a href="{{ url_for('master_page') }}">仕入先</a>を登録してください。{% endif %}</div>
 </form>
 
 <div class="kpis">
   <div class="kpi"><div class="label">一般単価</div><div class="value">{% if obs and obs[0].unit_price is not none %}¥{{ obs[0].unit_price|yen }}{% else %}—{% endif %}</div>
-    {% if m.budget_unit_price %}<div class="small muted">予算 ¥{{ m.budget_unit_price|yen }}</div>{% endif %}</div>
+    <div class="small muted">{% if m.budget_unit_price %}予算 ¥{{ m.budget_unit_price|yen }}{% else %}&nbsp;{% endif %}</div></div>
   <div class="kpi"><div class="label">一般納期</div><div class="value">{% if obs and obs[0].lead_time_days is not none %}{{ obs[0].lead_time_days }}<small>日</small>{% else %}—{% endif %}</div>
     <div class="small muted">必要納期 {{ m.required_date or '—' }}</div></div>
   <div class="kpi"><div class="label">必要数量 / 流通在庫</div><div class="value">{{ '{:,}'.format(m.quantity) }}<small>{{ m.unit }}</small></div>
@@ -47,104 +64,107 @@
 </div>
 
 <div class="grid g2">
-<div class="card">
-  <h2>単価の推移</h2>
-  {% if chart|length > 1 %}
-  <div class="chart" id="chart" data-points='{{ chart|tojson }}'>
-    <svg viewBox="0 0 640 200" role="img" aria-label="単価の推移"></svg><div class="tip"></div>
-  </div>
-  {% else %}<div class="empty">記録が 2 件以上になるとグラフが表示されます。</div>{% endif %}
-</div>
-<div class="card">
-  <h2>部材情報</h2>
-  <dl class="dl">
-    <dt>仕様</dt><dd>{{ m.spec or '—' }}</dd>
-    <dt>担当者</dt><dd>{% for s in staff if s.id == m.owner_id %}{{ s.name }}{% else %}—{% endfor %}</dd>
-    <dt>主仕入先</dt><dd>{% for s in suppliers if s.id == m.preferred_supplier_id %}{{ s.name }}{% else %}—{% endfor %}</dd>
-    <dt>監視ページ</dt><dd>{{ (m.watch_urls or '').splitlines()|select|list|length }} 件{% if not m.watch_urls %} <span class="muted">— <a href="#watch">URL を貼り付け</a>ると自動追跡します</span>{% endif %}</dd>
-    <dt>備考</dt><dd>{{ m.notes or '—' }}</dd>
-  </dl>
-</div>
+  <div class="card"><h2>単価の推移</h2>
+    {% set pp = series|chartpts('p') %}
+    {% if pp|length > 1 %}<div class="chart" data-points='{{ pp|tojson }}' data-unit="円" data-color="var(--series-1)"><svg role="img" aria-label="単価の推移"></svg><div class="tip"></div></div>
+    {% else %}<div class="empty">記録が 2 件以上になるとグラフが表示されます。</div>{% endif %}</div>
+  <div class="card"><h2>納期の推移</h2>
+    {% set lp = series|chartpts('l') %}
+    {% if lp|length > 1 %}<div class="chart" data-points='{{ lp|tojson }}' data-unit="日" data-step="1" data-color="var(--series-2)"><svg role="img" aria-label="納期の推移"></svg><div class="tip"></div></div>
+    {% else %}<div class="empty">記録が 2 件以上になるとグラフが表示されます。</div>{% endif %}</div>
 </div>
 
-<div class="grid g3">
-<div class="card">
-  <h2>見積依頼メールを作成</h2>
-  <form method="post" action="{{ url_for('make_rfq', mid=m.id) }}">
-    <label class="f">依頼先</label><select name="supplier_id" required>{% for s in suppliers %}<option value="{{ s.id }}" {{ 'selected' if m.preferred_supplier_id == s.id }}>{{ s.name }}</option>{% endfor %}</select>
-    <p><button>下書きを作成</button></p>
+<div class="split">
+<div>
+  <form method="post" action="{{ url_for('watch_url', mid=m.id) }}" class="card" id="watch">
+    <h2>商品ページの URL (ネットで取得)</h2>
+    <div class="row"><input name="url" type="url" required placeholder="https://www.monotaro.com/p/...  /  https://jp.misumi-ec.com/vona2/detail/..." style="flex:1;min-width:240px">
+      <button data-busy="読み取り中…">追加して読み取る</button></div>
+    <div class="hint">価格を自動で読めないときは、ページ内の金額一覧から選ぶだけで設定できます (サイトごとに記憶)。「一括取得」で他の部材と一緒に更新されます。</div>
+    {% if urls %}<table style="margin-top:10px"><tbody>{% for u in urls %}<tr>
+      <td class="small" style="word-break:break-all;padding-left:0"><a href="{{ u }}" target="_blank" rel="noopener">{{ u }}</a></td>
+      <td class="nowrap" style="text-align:right;padding-right:0"><a class="btn ghost sm" href="{{ url_for('watch_pick', mid=m.id, url=u) }}">価格の場所を指定し直す</a>
+        <form method="post" action="{{ url_for('watch_remove', mid=m.id) }}" style="display:inline"><input type="hidden" name="url" value="{{ u }}"><button class="danger sm">外す</button></form></td>
+    </tr>{% endfor %}</tbody></table>{% endif %}
   </form>
-  {% if not suppliers %}<div class="hint">先に<a href="{{ url_for('master_page') }}">仕入先</a>を登録してください。</div>{% endif %}
+
+  <div class="card flush">
+    <h2>価格・納期の履歴</h2>
+    <div class="scroll"><table>
+    <thead><tr><th>日時</th><th>取得元</th><th>販売元</th><th class="num">単価</th><th class="num">納期</th><th class="num">在庫</th><th>記録者</th></tr></thead>
+    <tbody>
+    {% for o in obs %}<tr><td class="muted small nowrap">{{ o.observed_at[:16] }}</td><td class="small">{{ source_labels.get(o.source, o.source) }}</td>
+    <td>{% if o.url %}<a href="{{ o.url }}" target="_blank" rel="noopener">{{ o.vendor or 'リンク' }}</a>{% else %}{{ o.vendor or o.supplier_name or '—' }}{% endif %}
+      {% if o.detail %}<details><summary class="muted small">比較した {{ (o.detail|fromjson)|length }} 件</summary>
+      {% for d in o.detail|fromjson %}<div class="small">{% if d.url %}<a href="{{ d.url }}" target="_blank" rel="noopener">{{ d.vendor }}</a>{% else %}{{ d.vendor }}{% endif %}：
+        {{ '¥' ~ (d.unit_price|yen) if d.unit_price is not none else '—' }} / {{ d.lead_time_days if d.lead_time_days is not none else '—' }} 日 / 在庫 {{ d.stock_qty if d.stock_qty is not none else '—' }}{% if d.note %} <span class="muted">({{ d.note }})</span>{% endif %}</div>{% endfor %}
+      </details>{% endif %}</td>
+    <td class="num">{{ '¥' ~ (o.unit_price|yen) if o.unit_price is not none else '—' }}</td><td class="num">{{ o.lead_time_days if o.lead_time_days is not none else '—' }}</td><td class="num">{{ '{:,}'.format(o.stock_qty) if o.stock_qty is not none else '—' }}</td>
+    <td class="small muted">{{ o.user_name or ('一括取得' if o.job_id else '') }}</td></tr>
+    {% endfor %}
+    </tbody></table></div>
+    {% if not obs %}<div class="empty">まだ記録がありません。URL を追加するか、見積回答を記録してください。</div>{% endif %}
+  </div>
+
+  <div class="card flush" id="timeline">
+    <h2>コメント・履歴</h2>
+    <form method="post" action="{{ url_for('add_comment', mid=m.id) }}" style="padding:0 18px 12px" class="row">
+      <input name="body" placeholder="チームへのメモ (例: 〇〇商事に電話済み、来週回答予定)" style="flex:1;min-width:220px" required><button class="sm">投稿</button></form>
+    {% if timeline %}<ul class="feed" style="padding:0 18px 12px">{% for t in timeline %}
+      <li><span class="t">{{ t.created_at[5:16] }}</span><span style="flex:1;min-width:0"><b>{{ t.user_name or '自動' }}</b>
+        {% if t.type == 'comment' %}<div class="comment" style="margin-top:4px">{{ t.body }}</div>
+        {% else %} {{ action_labels.get(t.action, t.action) }}{% if t.body %}<span class="muted small"> — {{ t.body }}</span>{% endif %}{% endif %}</span></li>
+    {% endfor %}</ul>{% else %}<div class="empty">まだ履歴はありません。</div>{% endif %}
+  </div>
 </div>
-<div class="card">
-  <h2>注文メールを作成</h2>
-  <form method="post" action="{{ url_for('make_order', mid=m.id) }}">
-    <label class="f">発注先</label><select name="supplier_id" required>{% for s in suppliers %}<option value="{{ s.id }}" {{ 'selected' if m.preferred_supplier_id == s.id }}>{{ s.name }}</option>{% endfor %}</select>
-    <div class="form-grid" style="grid-template-columns:1fr 1fr"><div><label class="f">数量</label><input name="quantity" type="number" value="{{ m.quantity }}"></div>
-    <div><label class="f">単価 (円)</label><input name="unit_price" required value="{{ (obs[0].unit_price|yen).replace(',', '') if obs and obs[0].unit_price is not none else '' }}"></div></div>
-    <label class="f">納期</label><input name="delivery_date" type="date" value="{{ m.required_date or '' }}">
-    <p><button>下書きを作成</button></p>
-  </form>
-</div>
-<div class="card">
-  <h2>見積回答などを記録</h2>
-  <form method="post" action="{{ url_for('add_observation', mid=m.id) }}">
+
+<div>
+  <div class="card">
+    <h2>価格・納期の定期確認</h2>
+    {% if interval > 0 %}
+    <dl class="dl">
+      <dt>確認周期</dt><dd>{{ interval }} 日ごと{% if m.confirm_interval_days is none %} <span class="muted small">(既定)</span>{% endif %}</dd>
+      <dt>前回の確認</dt><dd>{{ base.strftime('%Y-%m-%d') if base else '—' }}</dd>
+      <dt>次回の期限</dt><dd>{% if due %}<b style="{{ 'color:var(--crit)' if due.date() <= today }}">{{ due.strftime('%Y-%m-%d') }}</b>{% endif %}</dd>
+      <dt>期限が来たら</dt><dd>{% if m.auto_confirm and cfg.auto_confirm_enabled == '1' %}確認メールを<b>自動送信</b>{% elif m.auto_confirm %}自動送信 (管理者の設定で停止中) → 担当者へリマインド{% else %}担当者へリマインド{% endif %}</dd>
+    </dl>
+    {% else %}<p class="small muted" style="margin:0 0 8px">この部材はネットで価格を取得するため、定期確認はしていません。<a href="{{ url_for('material_edit', mid=m.id) }}">編集</a>で周期を設定できます。</p>{% endif %}
+    <form method="post" action="{{ url_for('mark_confirmed', mid=m.id) }}" class="row" style="margin-top:10px">
+      <input name="note" placeholder="確認内容 (任意)" style="flex:1;min-width:140px"><button class="ghost sm">確認済みにする</button></form>
+  </div>
+
+  <form method="post" action="{{ url_for('add_observation', mid=m.id) }}" class="card">
+    <h2>見積回答・価格を記録</h2>
     <div class="form-grid" style="grid-template-columns:1fr 1fr">
-      <div><label class="f">単価 (円)</label><input name="unit_price"></div>
+      <div><label class="f">単価 (円・税抜)</label><input name="unit_price"></div>
       <div><label class="f">納期 (日)</label><input name="lead_time_days" type="number"></div>
       <div><label class="f">在庫数</label><input name="stock_qty" type="number"></div>
       <div><label class="f">種別</label><select name="source"><option value="quote">見積回答</option><option value="manual">一般価格</option></select></div>
     </div>
-    <label class="f">仕入先</label><select name="supplier_id"><option value="">—</option>{% for s in suppliers %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}</select>
-    <p><button>記録する</button></p>
+    <label class="f">仕入先</label><select name="supplier_id"><option value="">—</option>{% for s in suppliers %}<option value="{{ s.id }}" {{ 'selected' if m.preferred_supplier_id == s.id }}>{{ s.name }}</option>{% endfor %}</select>
+    <p style="margin-bottom:0"><button>記録する</button></p>
+    <div class="hint">「見積回答」で記録すると、回答待ちのメールが回答済みになり、次回の確認期限も更新されます。</div>
   </form>
-</div>
-</div>
 
-<div class="card flush">
-  <h2>価格・納期の履歴</h2>
-  <div class="scroll"><table>
-  <thead><tr><th>日時</th><th>取得元</th><th>販売元</th><th class="num">単価</th><th class="num">納期</th><th class="num">在庫</th></tr></thead>
-  <tbody>
-  {% for o in obs %}<tr><td class="muted small nowrap">{{ o.observed_at[:16] }}</td><td class="small">{{ source_labels.get(o.source, o.source) }}</td>
-  <td>{% if o.url %}<a href="{{ o.url }}" target="_blank" rel="noopener">{{ o.vendor or 'リンク' }}</a>{% else %}{{ o.vendor or o.supplier_name or '—' }}{% endif %}
-    {% if o.detail %}<details><summary class="muted small">比較した {{ (o.detail|fromjson)|length }} 件</summary>
-    {% for d in o.detail|fromjson %}<div class="small">{% if d.url %}<a href="{{ d.url }}" target="_blank" rel="noopener">{{ d.vendor }}</a>{% else %}{{ d.vendor }}{% endif %}：
-      {{ '¥' ~ (d.unit_price|yen) if d.unit_price is not none else '—' }} / {{ d.lead_time_days if d.lead_time_days is not none else '—' }} 日 / 在庫 {{ d.stock_qty if d.stock_qty is not none else '—' }}{% if d.note %} <span class="muted">({{ d.note }})</span>{% endif %}</div>{% endfor %}
-    </details>{% endif %}</td>
-  <td class="num">{{ '¥' ~ (o.unit_price|yen) if o.unit_price is not none else '—' }}</td><td class="num">{{ o.lead_time_days if o.lead_time_days is not none else '—' }}</td><td class="num">{{ '{:,}'.format(o.stock_qty) if o.stock_qty is not none else '—' }}</td></tr>
-  {% endfor %}
-  </tbody></table></div>
-  {% if not obs %}<div class="empty">まだ記録がありません。「ネットで最新価格を取得」を押すか、見積回答を記録してください。</div>{% endif %}
-</div>
+  <div class="card">
+    <h2>部材情報</h2>
+    <dl class="dl">
+      <dt>担当者</dt><dd>{% for s in staff if s.id == m.owner_id %}{{ s.name }}{% else %}—{% endfor %}</dd>
+      <dt>主仕入先</dt><dd>{% for s in suppliers if s.id == m.preferred_supplier_id %}{{ s.name }}{% else %}<span class="muted">未設定</span>{% endfor %}</dd>
+      <dt>必要数量</dt><dd>{{ m.quantity }} {{ m.unit }}</dd>
+      <dt>必要納期</dt><dd>{{ m.required_date or '—' }}</dd>
+      <dt>備考</dt><dd>{{ m.notes or '—' }}</dd>
+    </dl>
+  </div>
 
-<div class="card flush">
-  <h2>メール履歴</h2>
-  {% if emails %}<div class="scroll"><table><tbody>{% for e in emails %}<tr><td class="muted small nowrap">{{ e.created_at[:16] }}</td><td class="nowrap">{{ kind_labels[e.kind] }}</td><td><a href="{{ url_for('email_edit', eid=e.id) }}">{{ e.subject }}</a></td><td>{{ status_pill(e.status) }}</td></tr>{% endfor %}</tbody></table></div>
-  {% else %}<div class="empty">まだメールはありません。</div>{% endif %}
+  <div class="card flush">
+    <h2>メール</h2>
+    {% if emails %}<ul class="feed" style="padding:0 18px 12px">{% for e in emails %}
+      <li><span class="t">{{ e.created_at[5:10] }}</span><span style="flex:1;min-width:0"><a href="{{ url_for('email_edit', eid=e.id) }}">{{ kind_labels[e.kind] }}</a> {{ status_pill(e.status) }}
+        {% if e.answered_at %}<span class="pill good">回答あり</span>{% elif e.status == 'sent' and e.kind in ('rfq','confirm','followup') %}<span class="pill off">回答待ち</span>{% endif %}
+        <div class="small muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ e.subject }}</div></span></li>
+    {% endfor %}</ul>{% else %}<div class="empty">まだメールはありません。</div>{% endif %}
+  </div>
 </div>
-
-<script>
-(function(){
-  var el=document.getElementById('chart'); if(!el) return;
-  var pts=JSON.parse(el.dataset.points), svg=el.querySelector('svg'), tip=el.querySelector('.tip');
-  var W=640,H=200,L=56,R=12,T=12,B=26, ps=pts.map(function(p){return p.p});
-  var lo=Math.min.apply(null,ps), hi=Math.max.apply(null,ps), pad=(hi-lo)*.15||hi*.05||1; lo-=pad; hi+=pad;
-  function x(i){return L+i*(W-L-R)/(pts.length-1)} function y(v){return T+(hi-v)/(hi-lo)*(H-T-B)}
-  var ns='http://www.w3.org/2000/svg', h='';
-  for(var k=0;k<=3;k++){var v=lo+(hi-lo)*k/3,yy=y(v);h+='<line x1="'+L+'" x2="'+(W-R)+'" y1="'+yy+'" y2="'+yy+'" stroke="var(--line)" stroke-width="1"/>'+
-    '<text x="'+(L-8)+'" y="'+(yy+4)+'" text-anchor="end" font-size="11" fill="var(--muted)">¥'+Math.round(v).toLocaleString()+'</text>';}
-  h+='<text x="'+L+'" y="'+(H-6)+'" font-size="11" fill="var(--muted)">'+pts[0].t+'</text><text x="'+(W-R)+'" y="'+(H-6)+'" font-size="11" text-anchor="end" fill="var(--muted)">'+pts[pts.length-1].t+'</text>';
-  h+='<polyline fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" points="'+pts.map(function(p,i){return x(i)+','+y(p.p)}).join(' ')+'"/>';
-  pts.forEach(function(p,i){h+='<circle cx="'+x(i)+'" cy="'+y(p.p)+'" r="4" fill="var(--accent)" stroke="var(--surface)" stroke-width="2"/>'});
-  h+='<line id="xh" y1="'+T+'" y2="'+(H-B)+'" stroke="var(--muted)" stroke-dasharray="3 3" visibility="hidden"/>';
-  svg.innerHTML=h; var xh=svg.querySelector('#xh');
-  svg.addEventListener('mousemove',function(e){var r=svg.getBoundingClientRect(),sx=(e.clientX-r.left)*W/r.width,
-    i=Math.max(0,Math.min(pts.length-1,Math.round((sx-L)/((W-L-R)/(pts.length-1))))),p=pts[i];
-    xh.setAttribute('x1',x(i));xh.setAttribute('x2',x(i));xh.setAttribute('visibility','visible');
-    tip.style.display='block';var px=x(i)*r.width/W;tip.style.left=px+'px';tip.style.transform='translate('+(px>r.width*.7?'-100%':px<r.width*.3?'0':'-50%')+',-115%)';tip.style.top=(y(p.p)*r.height/H)+'px';
-    tip.textContent=p.t+'  ¥'+p.p.toLocaleString()+(p.v?'  '+p.v:'');});
-  svg.addEventListener('mouseleave',function(){tip.style.display='none';xh.setAttribute('visibility','hidden')});
-})();
-</script>
+</div>
 {% endblock %}

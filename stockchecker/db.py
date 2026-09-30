@@ -3,23 +3,56 @@ from pathlib import Path
 
 SCHEMA = Path(__file__).with_name("schema.sql")
 
+# 既存 DB に後から追加した列 (起動時に自動で追加する)
+MIGRATIONS = {
+    "price_observations": {"vendor": "TEXT", "url": "TEXT", "detail": "TEXT",
+                           "job_id": "INTEGER", "created_by": "INTEGER"},
+    "materials": {"watch_urls": "TEXT",
+                  "confirm_interval_days": "INTEGER",   # 価格・納期の確認周期 (NULL=既定)
+                  "auto_confirm": "INTEGER NOT NULL DEFAULT 0",  # 期限到来で確認メールを自動送信
+                  "last_confirmed_at": "TEXT",
+                  "created_by": "INTEGER", "updated_by": "INTEGER", "updated_at": "TEXT"},
+    "staff": {"password_hash": "TEXT", "role": "TEXT NOT NULL DEFAULT 'member'",
+              "active": "INTEGER NOT NULL DEFAULT 1", "last_login_at": "TEXT"},
+    "emails": {"answered_at": "TEXT", "followup_of": "INTEGER", "created_by": "INTEGER",
+               "auto": "INTEGER NOT NULL DEFAULT 0"},
+    "alerts": {"ref_email_id": "INTEGER"},
+}
+
 
 def connect(path):
-    conn = sqlite3.connect(path, detect_types=0)
+    conn = sqlite3.connect(path, detect_types=0, timeout=15, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 15000")
     return conn
 
 
 def init_db(conn):
+    conn.execute("PRAGMA journal_mode = WAL")  # 複数人が同時に使っても読み書きが詰まらないように
     conn.executescript(SCHEMA.read_text(encoding="utf-8"))
-    cols = {r["name"] for r in conn.execute("PRAGMA table_info(price_observations)")}
-    for col in ("vendor", "url", "detail"):
-        if col not in cols:
-            conn.execute(f"ALTER TABLE price_observations ADD COLUMN {col} TEXT")
-    mcols = {r["name"] for r in conn.execute("PRAGMA table_info(materials)")}
-    if "watch_urls" not in mcols:
-        conn.execute("ALTER TABLE materials ADD COLUMN watch_urls TEXT")
+    for table, cols in MIGRATIONS.items():
+        have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for col, ddl in cols.items():
+            if col not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+    conn.commit()
+
+
+def get_setting(conn, key, default=None):
+    r = conn.execute("SELECT value FROM app_settings WHERE key=?", (key,)).fetchone()
+    return r["value"] if r and r["value"] is not None else default
+
+
+def set_setting(conn, key, value):
+    conn.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
+                 (key, None if value is None else str(value)))
+    conn.commit()
+
+
+def log_activity(conn, user_id, action, material_id=None, detail=None):
+    conn.execute("INSERT INTO activity (user_id, material_id, action, detail) VALUES (?,?,?,?)",
+                 (user_id, material_id, action, detail))
     conn.commit()
 
 
@@ -41,11 +74,13 @@ def previous_observation(conn, material_id, before_id):
 
 def add_observation(conn, material_id, source, unit_price=None, lead_time_days=None,
                     supplier_id=None, stock_qty=None, min_order_qty=None,
-                    currency="JPY", observed_at=None, vendor=None, url=None, detail=None):
+                    currency="JPY", observed_at=None, vendor=None, url=None, detail=None,
+                    job_id=None, created_by=None):
     cols = ["material_id", "source", "unit_price", "lead_time_days", "supplier_id",
-            "stock_qty", "min_order_qty", "currency", "vendor", "url", "detail"]
+            "stock_qty", "min_order_qty", "currency", "vendor", "url", "detail",
+            "job_id", "created_by"]
     vals = [material_id, source, unit_price, lead_time_days, supplier_id,
-            stock_qty, min_order_qty, currency, vendor, url, detail]
+            stock_qty, min_order_qty, currency, vendor, url, detail, job_id, created_by]
     if observed_at:
         cols.append("observed_at")
         vals.append(observed_at)

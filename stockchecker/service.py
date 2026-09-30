@@ -5,7 +5,7 @@ import urllib.request
 from collections import defaultdict
 from datetime import date
 
-from . import db, mailer, online, rules
+from . import db, mailer, mailflow, online, rules
 
 log = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ def queue_email(conn, kind, to_addr, subject, body, material_id=None,
     return cur.lastrowid
 
 
-def send_email(conn, email_id, settings):
+def send_email(conn, email_id, settings, user_id=None):
     row = conn.execute("SELECT * FROM emails WHERE id = ?", (email_id,)).fetchone()
     if row is None or row["status"] == "sent":
         return False
@@ -35,24 +35,22 @@ def send_email(conn, email_id, settings):
         "UPDATE emails SET status='sent', error=?, sent_at=datetime('now','localtime') WHERE id=?",
         (f"delivered: {where}", email_id))
     conn.commit()
+    if row["kind"] != "alert":
+        for m in mailflow.linked_materials(conn, email_id):
+            db.log_activity(conn, user_id if user_id is not None else row["created_by"], "email_sent",
+                            m["id"], f"{mailflow.KINDS.get(row['kind'], row['kind'])}を送信 ({row['to_addr']})"
+                            + (" [自動]" if row["auto"] else ""))
     return True
 
 
-def create_rfq(conn, material, supplier, settings, findings=()):
-    subject, body = mailer.build_rfq(material, supplier, settings, findings)
-    owner = conn.execute("SELECT * FROM staff WHERE id = ?", (material["owner_id"],)).fetchone()
-    return queue_email(conn, "rfq", supplier["email"], subject, body,
-                       material["id"], supplier["id"],
-                       cc_addr=owner["email"] if owner else None)
+def create_rfq(conn, material, supplier, settings, findings=(), user_id=None, auto=False):
+    return mailflow.create(conn, "rfq", supplier, [material], settings, user_id, auto=auto)
 
 
-def create_order(conn, material, supplier, settings, quantity, unit_price, delivery_date):
-    subject, body = mailer.build_order(material, supplier, settings, quantity,
-                                       unit_price, delivery_date)
-    owner = conn.execute("SELECT * FROM staff WHERE id = ?", (material["owner_id"],)).fetchone()
-    return queue_email(conn, "order", supplier["email"], subject, body,
-                       material["id"], supplier["id"],
-                       cc_addr=owner["email"] if owner else None)
+def create_order(conn, material, supplier, settings, quantity, unit_price, delivery_date,
+                 user_id=None):
+    return mailflow.create(conn, "order", supplier, [(material, quantity, unit_price)], settings,
+                           user_id, extra={"delivery_date": delivery_date})
 
 
 def _web_recently_checked(conn, material_id, days):
@@ -140,7 +138,8 @@ def run_checks(conn, settings, providers=(), today=None, notify=True):
         findings = evaluate_material(conn, m, settings, today)
         codes = {f.code for f in findings}
         open_alerts = {a["kind"]: a for a in conn.execute(
-            "SELECT * FROM alerts WHERE material_id=? AND status='open'", (m["id"],))}
+            "SELECT * FROM alerts WHERE material_id=? AND status='open'", (m["id"],))
+            if a["kind"] in rules.RULE_KINDS}
         # 解消した条件のアラートはクローズ
         for kind, a in open_alerts.items():
             if kind not in codes:
@@ -159,9 +158,10 @@ def run_checks(conn, settings, providers=(), today=None, notify=True):
                                (m["preferred_supplier_id"],)).fetchone()
             if sup and not _recent_rfq_exists(conn, m["id"], sup["id"],
                                               settings.rules.stale_days):
-                eid = create_rfq(conn, m, sup, settings, findings)
+                auto = bool(settings.auto_send_enabled and sup["auto_send_rfq"])
+                eid = create_rfq(conn, m, sup, settings, findings, auto=auto)
                 summary["rfq_drafts"] += 1
-                if settings.auto_send_enabled and sup["auto_send_rfq"]:
+                if auto:
                     if send_email(conn, eid, settings):
                         summary["rfq_sent"] += 1
 

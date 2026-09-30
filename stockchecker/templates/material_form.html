@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block body %}
 <div class="page-head"><div>
-  <div class="sub"><a href="{{ url_for('index') }}">ダッシュボード</a> / {{ '部材の編集' if m.id else '部材の登録' }}</div>
+  <div class="sub"><a href="{{ url_for('materials') }}">部材一覧</a> / {{ '部材の編集' if m.id else '部材の登録' }}</div>
   <h1>{{ '部材の編集' if m.id else '部材の登録' }}</h1></div></div>
 {% if not m.id %}
 <form method="get" class="card" style="border-left:4px solid var(--accent)">
@@ -41,7 +41,24 @@
   {% if not staff or not suppliers %}<div class="hint">担当者・仕入先は<a href="{{ url_for('master_page') }}">こちら</a>で登録できます。</div>{% endif %}
 </div>
 <div class="card">
-  <h2>価格の自動追跡</h2>
+  <h2>価格・納期の定期確認 (メール)</h2>
+  <p class="small muted" style="margin-top:0">特注品やネットに価格が無い部材は、周期ごとに仕入先へ価格・納期を確認します。期限が来ると担当者にリマインドします。</p>
+  {% set ci = m.confirm_interval_days %}
+  <div class="form-grid">
+    <div><label class="f">確認周期</label>
+      <select name="confirm_interval_days">
+        <option value="default" {{ 'selected' if ci is none or ci == '' }}>既定 (URL が無い部材のみ・設定画面の日数)</option>
+        <option value="0" {{ 'selected' if ci|string == '0' }}>確認しない</option>
+        {% for d in [30, 60, 90, 180, 365] %}<option value="{{ d }}" {{ 'selected' if ci|string == d|string }}>{{ d }} 日ごと</option>{% endfor %}
+        {% if ci and ci|int not in [0, 30, 60, 90, 180, 365] %}<option value="{{ ci }}" selected>{{ ci }} 日ごと</option>{% endif %}
+      </select></div>
+    <div><label class="f">期限が来たら</label>
+      <label class="inline" style="margin-top:8px"><input type="checkbox" name="auto_confirm" value="1" {{ 'checked' if m.auto_confirm }}> 主仕入先へ確認メールを自動送信する</label>
+      <div class="hint">管理者の設定で自動送信が許可されている場合のみ送信します。それ以外は担当者へのリマインドになります。</div></div>
+  </div>
+</div>
+<div class="card">
+  <h2>価格の自動追跡 (ネット)</h2>
   <label class="f">監視する商品ページの URL (1 行に 1 つ・任意)</label>
   <textarea name="watch_urls" style="min-height:80px" placeholder="https://www.monotaro.com/g/xxxxxxxx/&#10;https://jp.misumi-ec.com/vona2/detail/xxxxxxxx/">{{ m.watch_urls or '' }}</textarea>
   <div class="hint">通販サイトの商品ページを登録すると、定期チェックのたびに価格・納期を読み取ります (無料・キー不要)。</div>

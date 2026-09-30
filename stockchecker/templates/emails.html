@@ -1,18 +1,35 @@
 {% extends "base.html" %}
 {% block body %}
-<div class="page-head"><div><h1>メール</h1><div class="sub">見積依頼・注文・担当者通知の下書きと送信履歴</div></div></div>
+<div class="page-head"><div><h1>メール</h1><div class="sub">見積依頼・価格/納期の確認・注文・督促の下書きと送信履歴。回答が届いたら「回答あり」を記録してください。</div></div></div>
+<div class="tabs">
+  <a href="{{ url_for('emails', tab='draft') }}" class="{{ 'on' if tab == 'draft' }}">下書き<span class="count">{{ counts.draft }}</span></a>
+  <a href="{{ url_for('emails', tab='waiting') }}" class="{{ 'on' if tab == 'waiting' }}">回答待ち<span class="count">{{ counts.waiting }}</span></a>
+  <a href="{{ url_for('emails', tab='sent') }}" class="{{ 'on' if tab == 'sent' }}">送信済み</a>
+  <a href="{{ url_for('emails', tab='all') }}" class="{{ 'on' if tab == 'all' }}">すべて</a>
+</div>
 <div class="card flush">
 {% if rows %}
 <div class="scroll"><table>
-<thead><tr><th>作成</th><th>種別</th><th>件名</th><th>宛先</th><th>状態</th></tr></thead>
+<thead><tr><th>作成</th><th>種別</th><th>件名 / 部材</th><th>送り先</th><th>状態</th><th></th></tr></thead>
 <tbody>
 {% for e in rows %}
-<tr><td class="muted small nowrap">{{ e.created_at[:16] }}</td>
-<td class="nowrap">{{ kind_labels[e.kind] }}</td>
-<td><a href="{{ url_for('email_edit', eid=e.id) }}">{{ e.subject }}</a>{% if e.material_name %}<div class="muted small">{{ e.material_name }}</div>{% endif %}</td>
-<td class="small">{{ e.to_addr }}</td><td>{{ status_pill(e.status) }}</td></tr>
+{% set late = e.status == 'sent' and e.kind in ('rfq','confirm','followup') and not e.answered_at and e.sent_at and e.sent_at <= overdue %}
+<tr>
+  <td class="muted small nowrap">{{ e.created_at[5:16] }}<div>{{ e.user_name or ('自動' if e.auto else '') }}</div></td>
+  <td class="nowrap">{{ kind_labels.get(e.kind, e.kind) }}</td>
+  <td><a href="{{ url_for('email_edit', eid=e.id) }}">{{ e.subject }}</a>{% if e.parts %}<div class="muted small">{{ e.parts }}</div>{% endif %}</td>
+  <td class="small">{{ e.supplier_name or '' }}<div class="muted">{{ e.to_addr }}</div></td>
+  <td class="nowrap">{{ status_pill(e.status) }}
+    {% if e.answered_at %}<div><span class="pill good">回答あり</span></div>
+    {% elif e.status == 'sent' and e.kind in ('rfq','confirm','followup') %}<div><span class="pill {{ 'crit' if late else 'off' }}">{{ '督促時期' if late else '回答待ち' }}</span>{% if e.followups %} <span class="small muted">督促 {{ e.followups }} 回</span>{% endif %}</div>{% endif %}</td>
+  <td class="nowrap">
+    {% if e.status == 'sent' and e.kind in ('rfq','confirm','followup') and not e.answered_at %}
+      <form method="post" action="{{ url_for('email_edit', eid=e.id) }}" style="display:inline"><input type="hidden" name="action" value="answered"><button class="ghost sm">回答あり</button></form>
+      <form method="post" action="{{ url_for('email_edit', eid=e.id) }}" style="display:inline"><input type="hidden" name="action" value="followup"><button class="sm {{ '' if late else 'ghost' }}">督促</button></form>
+    {% elif e.status in ('draft','failed') %}<a class="btn sm" href="{{ url_for('email_edit', eid=e.id) }}">確認して送信</a>{% endif %}
+  </td></tr>
 {% endfor %}
 </tbody></table></div>
-{% else %}<div class="empty">まだメールはありません。要見積の部材があるとチェック時に自動で下書きされます。</div>{% endif %}
+{% else %}<div class="empty">{{ {'draft':'下書きはありません。部材画面の「見積依頼」などのボタンで作成できます。','waiting':'回答待ちのメールはありません。'}.get(tab, 'メールはありません。') }}</div>{% endif %}
 </div>
 {% endblock %}
