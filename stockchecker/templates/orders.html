@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head"><div><h1>発注・入荷</h1><div class="sub">注文メールを送信すると自動で記録されます。Web や電話で発注した分は部材画面の「発注を記録」から登録します。</div></div></div>
+<div class="tabs">
+  <a href="{{ url_for('orders_page', tab='open') }}" class="{{ 'on' if tab == 'open' }}">未入荷<span class="count">{{ counts.open }}</span></a>
+  <a href="{{ url_for('orders_page', tab='late') }}" class="{{ 'on' if tab == 'late' }}">入荷遅れ<span class="count" style="{{ 'background:var(--crit-soft);color:var(--crit)' if counts.late }}">{{ counts.late }}</span></a>
+  <a href="{{ url_for('orders_page', tab='noeta') }}" class="{{ 'on' if tab == 'noeta' }}">納期回答待ち<span class="count">{{ counts.noeta }}</span></a>
+  <a href="{{ url_for('orders_page', tab='done') }}" class="{{ 'on' if tab == 'done' }}">完了</a>
+  <a href="{{ url_for('orders_page', tab='all') }}" class="{{ 'on' if tab == 'all' }}">すべて</a>
+</div>
+<div class="card flush">
+{% if rows %}
+<div class="scroll"><table>
+<thead><tr><th>状態</th><th>部材</th><th>発注先 / 発注日</th><th class="num">数量</th><th class="num">入荷</th><th>入荷予定</th><th>操作</th></tr></thead>
+<tbody>
+{% for o in rows %}
+<tr>
+  <td>{{ order_pill(o) }}</td>
+  <td><a href="{{ url_for('order_detail', oid=o.id) }}"><b>{{ o.part_number }}</b></a><div class="muted small">{{ o.material_name }}{% if o.owner_name %} ・ {{ o.owner_name }}{% endif %}</div></td>
+  <td class="small">{{ o.supplier_name or '—' }}<div class="muted">{{ o.order_date }}</div></td>
+  <td class="num">{{ o.quantity }} <span class="muted">{{ o.unit }}</span>{% if o.unit_price is not none %}<div class="small muted">@¥{{ o.unit_price|yen }}</div>{% endif %}</td>
+  <td class="num">{{ o.received_qty }}</td>
+  <td class="nowrap">{% if o.promised_date %}<b style="{{ 'color:var(--crit)' if o.status in ('ordered','confirmed','partial') and o.promised_date < today }}">{{ o.promised_date }}</b><div class="small muted">回答納期</div>
+    {% elif o.required_date %}<span style="{{ 'color:var(--crit)' if o.status in ('ordered','confirmed','partial') and o.required_date < today }}">{{ o.required_date }}</span><div class="small muted">希望納期</div>{% else %}—{% endif %}</td>
+  <td>{% if o.status in ('ordered','confirmed','partial') %}
+    <div class="row" style="gap:6px">
+      <form method="post" action="{{ url_for('order_action', oid=o.id, action='eta') }}" class="row" style="gap:4px">
+        <input type="hidden" name="back" value="{{ request.full_path }}">
+        <input type="date" name="promised_date" value="{{ o.promised_date or '' }}" required style="width:140px;padding:4px 6px" aria-label="回答納期"><button class="ghost sm">納期を記録</button></form>
+      <form method="post" action="{{ url_for('order_action', oid=o.id, action='receive') }}" class="row" style="gap:4px">
+        <input type="hidden" name="back" value="{{ request.full_path }}">
+        <input type="number" name="quantity" min="1" value="{{ o.quantity - o.received_qty }}" style="width:70px;padding:4px 6px" aria-label="入荷数"><button class="sm">入荷</button></form>
+      <form method="post" action="{{ url_for('order_action', oid=o.id, action='inquiry') }}"><button class="ghost sm" title="仕入先に納期を問い合わせるメールの下書きを作成">納期確認メール</button></form>
+    </div>{% else %}<span class="small muted">{{ ('入荷 ' ~ o.received_date) if o.received_date else '' }}</span>{% endif %}</td>
+</tr>
+{% endfor %}
+</tbody></table></div>
+{% else %}<div class="empty">{{ {'open':'未入荷の発注はありません。','late':'入荷が遅れている発注はありません。','noeta':'納期回答待ちの発注はありません。'}.get(tab, '発注はありません。') }}</div>{% endif %}
+</div>
+{% endblock %}

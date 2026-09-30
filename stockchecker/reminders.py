@@ -8,10 +8,10 @@ import logging
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-from . import mailflow, rules, service
+from . import mailflow, orders, rules, service
 
 log = logging.getLogger(__name__)
-REMINDER_KINDS = {"confirm_due", "no_reply"}
+REMINDER_KINDS = {"confirm_due", "no_reply", "order_no_eta", "delivery_late"}
 
 
 def _dt(s):
@@ -70,7 +70,7 @@ def scan(conn, settings, now=None):
     cfg = mailflow.reminder_config(conn)
     can_auto_send = bool(settings.smtp_host)  # 自動送信は SMTP 設定がある場合のみ
     summary = {"confirm_due": 0, "auto_confirm": 0, "no_reply": 0, "auto_followup": 0,
-               "notifications": 0}
+               "order_no_eta": 0, "delivery_late": 0, "notifications": 0}
     new_items = defaultdict(list)   # owner_id -> [(material, [Finding])]
 
     # 1. 確認期限
@@ -119,6 +119,12 @@ def scan(conn, settings, now=None):
                 if m["owner_id"]:
                     new_items[m["owner_id"]].append((m, [rules.Finding("no_reply", msg, False)]))
     conn.commit()
+
+    # 3. 発注: 納期回答待ち・入荷遅れ
+    for m, fs in orders.scan(conn, cfg, now.date()):
+        summary[fs[0].code] = summary.get(fs[0].code, 0) + 1
+        if m["owner_id"]:
+            new_items[m["owner_id"]].append((m, fs))
 
     if cfg["notify_owner"] == "1":
         for owner_id, items in new_items.items():

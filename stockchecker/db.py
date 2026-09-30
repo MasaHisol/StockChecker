@@ -15,8 +15,13 @@ MIGRATIONS = {
     "staff": {"password_hash": "TEXT", "role": "TEXT NOT NULL DEFAULT 'member'",
               "active": "INTEGER NOT NULL DEFAULT 1", "last_login_at": "TEXT"},
     "emails": {"answered_at": "TEXT", "followup_of": "INTEGER", "created_by": "INTEGER",
-               "auto": "INTEGER NOT NULL DEFAULT 0"},
-    "alerts": {"ref_email_id": "INTEGER"},
+               "auto": "INTEGER NOT NULL DEFAULT 0", "message_id": "TEXT"},
+    "alerts": {"ref_email_id": "INTEGER", "ref_order_id": "INTEGER"},
+    "activity": {"actor": "TEXT", "client": "TEXT"},
+    "comments": {"actor": "TEXT"},
+    "email_materials": {"quantity": "INTEGER", "unit_price": "REAL", "requested_date": "TEXT",
+                        "order_id": "INTEGER"},
+    "fetch_jobs": {"started_by_name": "TEXT"},
 }
 
 
@@ -50,9 +55,13 @@ def set_setting(conn, key, value):
     conn.commit()
 
 
-def log_activity(conn, user_id, action, material_id=None, detail=None):
-    conn.execute("INSERT INTO activity (user_id, material_id, action, detail) VALUES (?,?,?,?)",
-                 (user_id, material_id, action, detail))
+def log_activity(conn, user_id, action, material_id=None, detail=None, actor=None, client=None):
+    """操作履歴を記録する。actor は操作者の名前 (未指定なら担当者名、どちらも無ければ「自動」)。"""
+    if actor is None:
+        r = conn.execute("SELECT name FROM staff WHERE id=?", (user_id,)).fetchone() if user_id else None
+        actor = r["name"] if r else "自動"
+    conn.execute("INSERT INTO activity (user_id, material_id, action, detail, actor, client) "
+                 "VALUES (?,?,?,?,?,?)", (user_id, material_id, action, detail, actor, client))
     conn.commit()
 
 

@@ -11,7 +11,7 @@ from stockchecker.config import Settings
 
 def make(tmp_path, auto=False, **kw):
     s = Settings(database=str(tmp_path / "t.db"), outbox_dir=str(tmp_path / "out"),
-                 auto_send_enabled=auto, auth=False, csrf=False, run_jobs_async=False,
+                 auto_send_enabled=auto, csrf=False, run_jobs_async=False,
                  page_watch_render=False, **kw)
     app = create_app(s)
     conn = db.connect(s.database)
@@ -51,7 +51,8 @@ def test_pages(tmp_path):
     for url in ["/", "/?mine=1", "/materials", "/materials/1", "/charts", "/charts?period=0&q=P",
                 "/emails", "/emails?tab=waiting", "/emails?tab=all", "/masters", "/import",
                 "/materials/new", "/materials/1/edit", "/settings", "/settings/templates?kind=confirm",
-                "/sources", "/account", r.headers["Location"]]:
+                "/sources", "/orders", "/orders?tab=late", "/orders?tab=all", "/inbox", "/inbox?tab=all",
+                "/excel", "/history", "/history?who=担当&action=email", r.headers["Location"]]:
         assert c.get(url).status_code == 200, url
     assert "chartpts" not in c.get("/materials/1").get_data(as_text=True)
     r = c.post("/materials/1/mail/order", data={"supplier_id": 1, "quantity": 5, "unit_price": "100"})
@@ -65,30 +66,25 @@ def test_pages(tmp_path):
     assert "電話済み" in c.get("/materials/1").get_data(as_text=True)
 
 
-def test_login_setup_and_csrf(tmp_path):
+def test_operator_name_and_csrf_and_history(tmp_path):
     s = Settings(database=str(tmp_path / "t.db"), outbox_dir=str(tmp_path / "o"))
     app = create_app(s)
     c = app.test_client()
-    assert "/setup" in c.get("/").headers["Location"]
-    c.post("/setup", data={"name": "管理者", "email": "a@example.com", "password": "secret1"})
-    assert c.get("/").status_code == 200
-    c.post("/logout", data={"_csrf": _token(c)})
-    assert "/login" in c.get("/materials").headers["Location"]
-    r = c.post("/login", data={"email": "a@example.com", "password": "wrong!"})
-    assert "違います" in r.get_data(as_text=True)
-    c.post("/login", data={"email": "A@example.com", "password": "secret1"})
-    assert c.get("/materials").status_code == 200
-    # CSRF トークンが無い POST は拒否
-    assert c.post("/materials/new", data={"part_number": "X", "name": "x"}).status_code == 400
-    r = c.post("/materials/new", data={"part_number": "X", "name": "x", "_csrf": _token(c)})
-    assert r.status_code == 302
-    # メンバー追加 → そのメンバーでログインできる / 設定画面は管理者のみ
-    c.post("/masters", data={"type": "staff", "name": "メンバー", "email": "m@example.com",
-                             "password": "member1", "role": "member", "_csrf": _token(c)})
-    c2 = app.test_client()
-    c2.post("/login", data={"email": "m@example.com", "password": "member1"})
-    assert c2.get("/").status_code == 200
-    assert c2.get("/settings").status_code == 302
+    page = c.get("/").get_data(as_text=True)
+    assert "あなたの名前を選んでください" in page  # ログインは無く、名前だけ選ぶ
+    assert c.post("/materials/new", data={"part_number": "X", "name": "x"}).status_code == 400  # CSRF
+    c.post("/operator", data={"name": "佐藤", "_csrf": _token(c)})
+    assert "あなたの名前を選んでください" not in c.get("/").get_data(as_text=True)
+    c.post("/materials/new", data={"part_number": "X", "name": "x", "quantity": "1", "_csrf": _token(c)})
+    c.post("/materials/1/edit", data={"part_number": "X", "name": "xx", "quantity": "3", "_csrf": _token(c)})
+    conn = db.connect(s.database)
+    acts = conn.execute("SELECT * FROM activity ORDER BY id").fetchall()
+    assert [a["actor"] for a in acts] == ["佐藤", "佐藤"]
+    assert "品名: x → xx" in acts[1]["detail"] and "数量: 1 → 3" in acts[1]["detail"]
+    h = c.get("/history?who=佐藤").get_data(as_text=True)
+    assert "品名: x → xx" in h
+    r = c.get("/history.xlsx?who=佐藤")
+    assert r.status_code == 200 and r.data[:2] == b"PK"
 
 
 def _token(client):
@@ -233,3 +229,152 @@ def test_template_edit_applies(tmp_path):
     eid = int(c.post("/materials/1/mail/rfq", data={}).headers["Location"].rsplit("/", 1)[1])
     e = conn.execute("SELECT * FROM emails WHERE id=?", (eid,)).fetchone()
     assert e["subject"] == "見積お願い 部品 (P-1)" and e["body"].startswith("ご担当者 様")
+
+
+def test_order_flow_from_email_to_receipt(tmp_path):
+    app, s, conn = make(tmp_path)
+    c = app.test_client()
+    c.post("/operator", data={"name": "購買A"})
+    eid = int(c.post("/materials/1/mail/order", data={"quantity": "5", "unit_price": "120",
+                                                      "delivery_date": "2026-10-10"}).headers["Location"].rsplit("/", 1)[1])
+    e = conn.execute("SELECT * FROM emails WHERE id=?", (eid,)).fetchone()
+    c.post(f"/emails/{eid}", data={"to_addr": e["to_addr"], "subject": e["subject"], "body": e["body"], "action": "send"})
+    o = conn.execute("SELECT * FROM orders").fetchone()
+    assert (o["quantity"], o["unit_price"], o["required_date"], o["status"]) == (5, 120, "2026-10-10", "ordered")
+    assert conn.execute("SELECT message_id FROM emails WHERE id=?", (eid,)).fetchone()[0]
+    # 希望納期を過ぎても未入荷 → 入荷遅れのリマインド
+    s2 = reminders.scan(conn, s, now=datetime(2026, 10, 12))
+    assert s2["delivery_late"] == 1
+    assert "入荷遅れ" in c.get("/").get_data(as_text=True)
+    # 納期確認メール → 回答納期 → 分納 → 完納
+    c.post(f"/orders/{o['id']}/inquiry")
+    d = conn.execute("SELECT * FROM emails WHERE kind='delivery'").fetchone()
+    assert d and "納期ご確認" in d["subject"] and str(o["order_date"]) in d["body"]
+    c.post(f"/orders/{o['id']}/eta", data={"promised_date": "2026-10-20"})
+    assert conn.execute("SELECT status, promised_date FROM orders").fetchone()[:] == ("confirmed", "2026-10-20")
+    reminders.scan(conn, s, now=datetime(2026, 10, 12))
+    assert conn.execute("SELECT COUNT(*) FROM alerts WHERE kind='delivery_late' AND status='open'").fetchone()[0] == 0
+    c.post(f"/orders/{o['id']}/receive", data={"quantity": "2"})
+    assert conn.execute("SELECT status, received_qty FROM orders").fetchone()[:] == ("partial", 2)
+    c.post(f"/orders/{o['id']}/receive", data={})  # 残り全部
+    assert conn.execute("SELECT status, received_qty FROM orders").fetchone()[:] == ("received", 5)
+    acts = [r["action"] for r in conn.execute("SELECT action FROM activity WHERE actor='購買A'")]
+    assert {"order_new", "order_eta", "order_receive"} <= set(acts)
+    assert c.get(f"/orders/{o['id']}").status_code == 200
+    # 発注の単価は価格の履歴にも残る
+    assert conn.execute("SELECT COUNT(*) FROM price_observations WHERE source='order'").fetchone()[0] == 1
+
+
+def test_manual_order_and_no_eta_reminder(tmp_path):
+    app, s, conn = make(tmp_path)
+    c = app.test_client()
+    c.post("/materials/1/order-record", data={"supplier_id": "1", "quantity": "3", "order_date": "2026-09-01"})
+    assert reminders.scan(conn, s, now=datetime(2026, 9, 30))["order_no_eta"] == 1
+
+
+def _reply_eml(msgid_ref, subject, body, frm="s@example.com"):
+    from email.message import EmailMessage
+    m = EmailMessage()
+    m["From"] = f"仕入先 <{frm}>"
+    m["To"] = "purchasing@example.com"
+    m["Subject"] = subject
+    m["Message-ID"] = "<reply-1@example.com>"
+    if msgid_ref:
+        m["In-Reply-To"] = msgid_ref
+    m["Date"] = "Wed, 30 Sep 2026 10:00:00 +0900"
+    m.set_content(body)
+    return bytes(m)
+
+
+def test_inbox_upload_match_extract_apply(tmp_path):
+    import io
+    app, s, conn = make(tmp_path)
+    c = app.test_client()
+    eid = int(c.post("/materials/1/mail/rfq", data={}).headers["Location"].rsplit("/", 1)[1])
+    e = conn.execute("SELECT * FROM emails WHERE id=?", (eid,)).fetchone()
+    c.post(f"/emails/{eid}", data={"to_addr": e["to_addr"], "subject": e["subject"], "body": e["body"], "action": "send"})
+    mid = conn.execute("SELECT message_id FROM emails WHERE id=?", (eid,)).fetchone()[0]
+    raw = _reply_eml(mid, "Re: " + e["subject"], "お世話になっております。\nP-1 部品: 単価 ¥1,250 (税抜)、納期 受注後2週間です。")
+    c.post("/inbox/upload", data={"files": (io.BytesIO(raw), "reply.eml")}, content_type="multipart/form-data")
+    r = conn.execute("SELECT * FROM inbox").fetchone()
+    assert r["matched_email_id"] == eid and "In-Reply-To" in r["match_method"]
+    ext = json.loads(r["extracted"])["items"][0]
+    assert ext["unit_price"] == 1250 and ext["lead_time_days"] == 14
+    assert conn.execute("SELECT answered_at FROM emails WHERE id=?", (eid,)).fetchone()[0]  # 返信 = 回答あり
+    assert "単価" in c.get(f"/inbox/{r['id']}").get_data(as_text=True)
+    c.post(f"/inbox/{r['id']}/apply", data={"use_1": "1", "price_1": "1250", "lead_1": "14"})
+    last = db.latest_observation(conn, 1)
+    assert (last["source"], last["unit_price"], last["lead_time_days"]) == ("quote", 1250, 14)
+    assert conn.execute("SELECT status FROM inbox").fetchone()[0] == "applied"
+    # 同じメールをもう一度取り込んでも重複しない
+    c.post("/inbox/upload", data={"files": (io.BytesIO(raw), "reply.eml")}, content_type="multipart/form-data")
+    assert conn.execute("SELECT COUNT(*) FROM inbox").fetchone()[0] == 1
+
+
+def test_inbox_imap_only_keeps_supplier_mail(tmp_path):
+    from stockchecker import inbox
+    _, s, conn = make(tmp_path)
+    s.imap_host, s.imap_user = "imap.example.com", "u"
+    msgs = [_reply_eml(None, "見積の件", "P-1 単価 900円").replace(b"reply-1", b"a1"),
+            _reply_eml(None, "ニュースレター", "セール", frm="news@shop.example").replace(b"reply-1", b"a2")]
+
+    class FakeIMAP:
+        def __init__(self, host, port):
+            pass
+
+        def login(self, u, p):
+            pass
+
+        def select(self, folder, readonly):
+            assert readonly
+
+        def search(self, *a):
+            return "OK", [b"1 2"]
+
+        def fetch(self, num, what):
+            raw = msgs[int(num) - 1]
+            return "OK", [(b"x", raw)]
+
+        def logout(self):
+            pass
+    summary = inbox.fetch_imap(conn, s, client_factory=FakeIMAP)
+    assert summary["imported"] == 1 and conn.execute("SELECT from_addr FROM inbox").fetchone()[0] == "s@example.com"
+
+
+def test_excel_template_import_preview_apply(tmp_path):
+    import io
+    from openpyxl import load_workbook
+    from stockchecker import excel
+    app, s, conn = make(tmp_path)
+    c = app.test_client()
+    tpl = c.get("/excel/template.xlsx")
+    assert tpl.status_code == 200
+    wb = load_workbook(io.BytesIO(tpl.data))
+    ws, ws2 = wb["部材"], wb["仕入先"]
+    ws.delete_rows(2)
+    ws.append(["P-1", "部品 (更新)", None, None, 10])                                    # 既存を更新
+    ws.append(["N-1", "新しい部材", "ミスミ", None, 4, "本", "2026/12/01", 500, "はい", "担当",
+               "新仕入先", "https://example.com/p/1", 60, "いいえ", None, 480, 7])          # 新規 (新しい仕入先)
+    ws.append(["N-2", None])                                                               # エラー
+    ws2.delete_rows(2)
+    ws2.append(["新仕入先", "田中", "new@example.com"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    r = c.post("/excel/upload", data={"file": (io.BytesIO(buf.getvalue()), "parts.xlsx")},
+               content_type="multipart/form-data")
+    bid = int(r.headers["Location"].rsplit("/", 1)[1])
+    page = c.get(f"/excel/preview/{bid}").get_data(as_text=True)
+    assert "品名: 部品 → 部品 (更新)" in page and "品番と品名は必須です" in page
+    c.post(f"/excel/apply/{bid}")
+    n = conn.execute("SELECT * FROM materials WHERE part_number='N-1'").fetchone()
+    sup = conn.execute("SELECT * FROM suppliers WHERE name='新仕入先'").fetchone()
+    assert n["preferred_supplier_id"] == sup["id"] and n["custom_item"] == 1 and n["required_date"] == "2026-12-01"
+    assert n["owner_id"] == 1 and n["confirm_interval_days"] == 60
+    assert conn.execute("SELECT name, quantity FROM materials WHERE part_number='P-1'").fetchone()[:] == ("部品 (更新)", 10)
+    assert db.latest_observation(conn, n["id"])["unit_price"] == 480
+    assert conn.execute("SELECT COUNT(*) FROM materials WHERE part_number='N-2'").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM activity WHERE action='excel_import'").fetchone()[0] >= 3
+    # 出力 → そのまま取り込み直しても「変更なし」
+    out = c.get("/excel/materials.xlsx")
+    pv = excel.parse(conn, out.data)
+    assert {m["action"] for m in pv["materials"]} == {"same"}

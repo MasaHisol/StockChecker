@@ -14,10 +14,11 @@ KINDS = {
     "confirm": "価格・納期の確認",
     "order": "注文",
     "followup": "回答のお願い (督促)",
+    "delivery": "納期の確認 (発注済み)",
     "alert": "担当者への通知",
 }
 # 回答を待つ種類 (回答が無いと督促のリマインド対象)
-AWAIT_REPLY = ("rfq", "confirm", "followup")
+AWAIT_REPLY = ("rfq", "confirm", "followup", "delivery")
 
 PLACEHOLDERS = {
     "{supplier_name}": "仕入先の社名", "{contact_name}": "仕入先のご担当者名",
@@ -26,6 +27,7 @@ PLACEHOLDERS = {
     "{reply_by}": "回答期限 (今日 + 設定日数)", "{delivery_date}": "注文の納期",
     "{total_amount}": "注文の合計金額", "{original_subject}": "督促: 元メールの件名",
     "{original_date}": "督促: 元メールの送信日",
+    "{order_date}": "納期確認: 発注日",
 }
 
 DEFAULT_TEMPLATES = {
@@ -61,6 +63,16 @@ DEFAULT_TEMPLATES = {
         "  合計金額: {total_amount} 円 (税抜)\n"
         "  納期　　: {delivery_date}\n\n"
         "恐れ入りますが、注文請書または受領のご連絡をお願いいたします。\n\n"
+        "--\n{company}\n{sender_name}\n{sender_email}\n"),
+    "delivery": (
+        "【納期ご確認のお願い】{title} - {company}",
+        "{supplier_name}\n{contact_name} 様\n\n"
+        "いつもお世話になっております。{company}の{sender_name}です。\n\n"
+        "{order_date} に発注いたしました下記部材につきまして、\n"
+        "納期 (出荷予定日・入荷予定日) をお知らせいただけますでしょうか。\n\n"
+        "{items}\n\n"
+        "恐れ入りますが、{reply_by} までにご回答いただけますと幸いです。\n"
+        "既にご連絡いただいている場合は、行き違いとなり失礼いたしました。\n\n"
         "--\n{company}\n{sender_name}\n{sender_email}\n"),
     "followup": (
         "【ご確認のお願い】{original_subject}",
@@ -109,7 +121,7 @@ def item_lines(conn, kind, m, qty=None, unit_price=None):
     if m["spec"]:
         lines.append(f"  仕様　　: {m['spec']}")
     lines.append(f"  数量　　: {qty or m['quantity']} {m['unit']}")
-    if m["required_date"] and kind != "order":
+    if m["required_date"] and kind not in ("order", "delivery"):
         lines.append(f"  希望納期: {m['required_date']}")
     if kind == "confirm":
         last = db.latest_observation(conn, m["id"])
@@ -152,7 +164,7 @@ def build(conn, kind, supplier, materials, settings, sender, extra=None):
 
 
 def create(conn, kind, supplier, materials, settings, user_id=None, cc=None, extra=None,
-           followup_of=None, auto=False):
+           followup_of=None, auto=False, actor=None, client=None, order_id=None):
     """下書きを作成して email_id を返す。materials は material_row のリストか
     (material_row, qty, unit_price) のリスト。"""
     items = [x if isinstance(x, tuple) else (x, None, None) for x in materials]
@@ -171,16 +183,30 @@ def create(conn, kind, supplier, materials, settings, user_id=None, cc=None, ext
          items[0][0]["id"] if len(items) == 1 else None, supplier["id"], user_id, followup_of,
          1 if auto else 0))
     eid = cur.lastrowid
-    conn.executemany("INSERT OR IGNORE INTO email_materials (email_id, material_id) VALUES (?,?)",
-                     [(eid, m["id"]) for m, _, _ in items])
+    req = (extra or {}).get("delivery_date") if kind == "order" else None
+    conn.executemany("INSERT OR IGNORE INTO email_materials (email_id, material_id, quantity, unit_price, "
+                     "requested_date, order_id) VALUES (?,?,?,?,?,?)",
+                     [(eid, m["id"], q, up, req, order_id) for m, q, up in items])
     conn.commit()
     for m, _, _ in items:
         db.log_activity(conn, user_id, "email_draft", m["id"],
-                        f"{KINDS[kind]}の下書きを作成 ({supplier['name']})" + (" [自動]" if auto else ""))
+                        f"{KINDS[kind]}の下書きを作成 ({supplier['name']})" + (" [自動]" if auto else ""),
+                        actor if not auto else "自動", client)
     return eid
 
 
-def create_bulk(conn, kind, materials, settings, user_id=None):
+def create_delivery_inquiry(conn, order, settings, user_id=None, actor=None, client=None, auto=False):
+    """発注済みの部材について、仕入先に納期を問い合わせる下書きを作る。"""
+    sup = conn.execute("SELECT * FROM suppliers WHERE id=?", (order["supplier_id"],)).fetchone()
+    m = conn.execute("SELECT * FROM materials WHERE id=?", (order["material_id"],)).fetchone()
+    if not sup or not m:
+        return None
+    return create(conn, "delivery", sup, [(m, order["quantity"], None)], settings, user_id,
+                  extra={"order_date": order["order_date"]}, auto=auto, actor=actor, client=client,
+                  order_id=order["id"])
+
+
+def create_bulk(conn, kind, materials, settings, user_id=None, actor=None, client=None):
     """部材を主仕入先ごとにまとめて下書きを作る。戻り値: (email_ids, 仕入先未設定の部材)"""
     groups, no_supplier = defaultdict(list), []
     for m in materials:
@@ -190,7 +216,7 @@ def create_bulk(conn, kind, materials, settings, user_id=None):
         sup = conn.execute("SELECT * FROM suppliers WHERE id=?", (sid,)).fetchone()
         if sup:
             items = [(m, None, _latest_price(conn, m)) if kind == "order" else m for m in ms]
-            ids.append(create(conn, kind, sup, items, settings, user_id))
+            ids.append(create(conn, kind, sup, items, settings, user_id, actor=actor, client=client))
     return ids, no_supplier
 
 
@@ -199,7 +225,7 @@ def _latest_price(conn, m):
     return o["unit_price"] if o else None
 
 
-def create_followup(conn, email, settings, user_id=None, auto=False):
+def create_followup(conn, email, settings, user_id=None, auto=False, actor=None, client=None):
     """送信済みメールへの督促の下書きを作る。"""
     sup = conn.execute("SELECT * FROM suppliers WHERE id=?", (email["supplier_id"],)).fetchone()
     mats = linked_materials(conn, email["id"])
@@ -207,8 +233,11 @@ def create_followup(conn, email, settings, user_id=None, auto=False):
         return None
     extra = {"original_subject": email["subject"],
              "original_date": (email["sent_at"] or email["created_at"])[:10]}
+    oid = conn.execute("SELECT order_id FROM email_materials WHERE email_id=? AND order_id IS NOT NULL",
+                       (email["id"],)).fetchone()
     return create(conn, "followup", sup, mats, settings, user_id, extra=extra,
-                  followup_of=email["id"], auto=auto)
+                  followup_of=email["id"], auto=auto, actor=actor, client=client,
+                  order_id=oid[0] if oid else None)
 
 
 def linked_materials(conn, email_id):
@@ -216,7 +245,7 @@ def linked_materials(conn, email_id):
                         "WHERE em.email_id=? ORDER BY m.id", (email_id,)).fetchall()
 
 
-def mark_answered(conn, email_id, user_id=None):
+def mark_answered(conn, email_id, user_id=None, actor=None, client=None, detail=None):
     """メール (と督促の元メール) を回答済みにし、部材の確認日を更新する。"""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     chain, eid = [], email_id
@@ -232,20 +261,20 @@ def mark_answered(conn, email_id, user_id=None):
                      [(now, i) for i in chain])
     for m in linked_materials(conn, email_id):
         conn.execute("UPDATE materials SET last_confirmed_at=? WHERE id=?", (now, m["id"]))
-        db.log_activity(conn, user_id, "answered", m["id"], "仕入先からの回答を記録")
+        db.log_activity(conn, user_id, "answered", m["id"], detail or "仕入先からの回答を記録", actor, client)
     conn.execute("UPDATE alerts SET status='resolved' WHERE ref_email_id IN "
                  f"({','.join('?' * len(chain))}) AND status='open'", chain)
     conn.commit()
 
 
-def record_quote_answer(conn, material_id, user_id=None):
+def record_quote_answer(conn, material_id, user_id=None, actor=None, client=None):
     """見積回答 (価格・納期) を記録したとき、その部材の回答待ちメールを回答済みにする。"""
     pending = conn.execute(
         "SELECT e.id FROM emails e JOIN email_materials em ON em.email_id=e.id "
         f"WHERE em.material_id=? AND e.kind IN {AWAIT_REPLY} AND e.status='sent' "
         "AND e.answered_at IS NULL", (material_id,)).fetchall()
     for r in pending:
-        mark_answered(conn, r["id"], user_id)
+        mark_answered(conn, r["id"], user_id, actor, client)
     conn.execute("UPDATE materials SET last_confirmed_at=datetime('now','localtime') WHERE id=?",
                  (material_id,))
     conn.execute("UPDATE alerts SET status='resolved' WHERE material_id=? AND kind='confirm_due' "

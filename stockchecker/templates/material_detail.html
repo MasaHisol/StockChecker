@@ -63,6 +63,29 @@
     <div class="small muted">{{ obs[0].observed_at[:10] if obs else '未取得' }}{% if obs and obs[0].vendor %} ・ {{ obs[0].vendor }}{% endif %}</div></div>
 </div>
 
+<div class="card flush" id="orders">
+  <div class="card-head"><h2>発注・入荷</h2>
+    <details><summary class="btn ghost sm">＋ 発注を記録 (Web・電話で発注した場合)</summary>
+      <form method="post" action="{{ url_for('order_record', mid=m.id) }}" class="form-grid" style="margin-top:8px;max-width:760px">
+        <div><label class="f">発注先</label><select name="supplier_id"><option value="">—</option>{% for s in suppliers %}<option value="{{ s.id }}" {{ 'selected' if m.preferred_supplier_id == s.id }}>{{ s.name }}</option>{% endfor %}</select></div>
+        <div><label class="f">数量</label><input name="quantity" type="number" min="1" value="{{ m.quantity }}"></div>
+        <div><label class="f">単価 (円・税抜)</label><input name="unit_price" value="{{ obs[0].unit_price if obs and obs[0].unit_price is not none else '' }}"></div>
+        <div><label class="f">発注日</label><input name="order_date" type="date" value="{{ today }}"></div>
+        <div><label class="f">希望納期</label><input name="required_date" type="date" value="{{ m.required_date or '' }}"></div>
+        <div><label class="f">メモ</label><input name="note" placeholder="注文番号など"></div>
+        <div style="align-self:end;margin-top:8px"><button>記録する</button></div>
+      </form></details></div>
+  {% if m_orders %}<div class="scroll"><table>
+    <thead><tr><th>発注日</th><th>状態</th><th>発注先</th><th class="num">数量</th><th class="num">入荷</th><th>入荷予定</th><th></th></tr></thead>
+    <tbody>{% for o in m_orders %}<tr>
+      <td class="nowrap"><a href="{{ url_for('order_detail', oid=o.id) }}">{{ o.order_date }}</a></td>
+      <td>{{ order_pill(o) }}</td><td class="small">{{ o.supplier_name or '—' }}</td>
+      <td class="num">{{ o.quantity }}</td><td class="num">{{ o.received_qty }}</td>
+      <td class="nowrap">{{ o.promised_date or ((o.required_date ~ ' (希望)') if o.required_date else '—') }}</td>
+      <td class="nowrap"><a class="btn ghost sm" href="{{ url_for('order_detail', oid=o.id) }}">開く</a></td></tr>{% endfor %}</tbody></table></div>
+  {% else %}<div class="empty" style="padding:14px">まだ発注はありません。「注文」ボタンで作ったメールを送信すると自動で記録されます。</div>{% endif %}
+</div>
+
 <div class="grid g2">
   <div class="card"><h2>単価の推移</h2>
     {% set pp = series|chartpts('p') %}

@@ -45,8 +45,14 @@ class Settings:
     web_search: str = "fallback"
     web_search_interval_days: int = 7   # 同じ部材を Web 検索する最短間隔 (費用抑制)
     rules: Rules = field(default_factory=Rules)
+    # 受信メール (IMAP)
+    imap_host: str = ""
+    imap_port: int = 993
+    imap_user: str = ""
+    imap_password: str = ""
+    imap_folder: str = "INBOX"
+    imap_ssl: bool = True
     # チーム利用
-    auth: bool = True                  # ログインを必須にする
     csrf: bool = True                  # フォーム送信の改ざん防止
     background: bool = False           # リマインドの定期スキャンを動かす (launcher / serve で有効)
     reminder_interval_minutes: int = 30
@@ -78,6 +84,12 @@ class Settings:
         s.anthropic_api_key = e("ANTHROPIC_API_KEY", s.anthropic_api_key)
         s.web_search = e("SC_WEB_SEARCH", s.web_search).lower()
         s.web_search_interval_days = int(e("SC_WEB_SEARCH_INTERVAL_DAYS", s.web_search_interval_days))
+        s.imap_host = e("SC_IMAP_HOST", s.imap_host)
+        s.imap_port = int(e("SC_IMAP_PORT", s.imap_port))
+        s.imap_user = e("SC_IMAP_USER", s.imap_user)
+        s.imap_password = e("SC_IMAP_PASSWORD", s.imap_password)
+        s.imap_folder = e("SC_IMAP_FOLDER", s.imap_folder)
+        s.imap_ssl = _env_bool("SC_IMAP_SSL", s.imap_ssl)
         r = s.rules
         r.stale_days = int(e("SC_STALE_DAYS", r.stale_days))
         r.price_change_pct = float(e("SC_PRICE_CHANGE_PCT", r.price_change_pct))

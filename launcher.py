@@ -9,6 +9,7 @@
 import configparser
 import logging
 import os
+import re
 import socket
 import sys
 import threading
@@ -64,6 +65,16 @@ web_search = off
 ; 同じ部材を Web 検索する最短間隔 (日)。費用を抑えるため
 web_search_interval_days = 7
 
+[imap]
+; 仕入先からの返信を「受信メール」画面のボタンで取り込む (任意)。空欄なら .eml/.msg のアップロードのみ
+; 例: Gmail は imap.gmail.com / Microsoft 365 は outlook.office365.com (アプリ パスワードが必要な場合あり)
+host =
+port = 993
+user =
+password =
+folder = INBOX
+ssl = 1
+
 [automation]
 ; 1 にすると「自動送信 ON」の仕入先へ見積依頼を承認なしで送信します
 auto_send = 0
@@ -94,6 +105,12 @@ ENV_MAP = {
     ("sources", "anthropic_api_key"): "ANTHROPIC_API_KEY",
     ("sources", "web_search"): "SC_WEB_SEARCH",
     ("sources", "web_search_interval_days"): "SC_WEB_SEARCH_INTERVAL_DAYS",
+    ("imap", "host"): "SC_IMAP_HOST",
+    ("imap", "port"): "SC_IMAP_PORT",
+    ("imap", "user"): "SC_IMAP_USER",
+    ("imap", "password"): "SC_IMAP_PASSWORD",
+    ("imap", "folder"): "SC_IMAP_FOLDER",
+    ("imap", "ssl"): "SC_IMAP_SSL",
     ("automation", "auto_send"): "SC_AUTO_SEND",
     ("automation", "price_feed_url"): "SC_PRICE_FEED_URL",
     ("rules", "stale_days"): "SC_STALE_DAYS",
@@ -108,10 +125,14 @@ def load_config():
         INI.write_text(TEMPLATE, encoding="utf-8")
     user = configparser.ConfigParser()
     user.read(INI, encoding="utf-8")
-    if not user.has_section("sources"):  # 旧バージョンの ini に新しい設定欄を追記
-        block = TEMPLATE[TEMPLATE.index("\n[sources]") + 1:TEMPLATE.index("\n[automation]") + 1]
-        with INI.open("a", encoding="utf-8") as f:
-            f.write("\n" + block)
+    # 旧バージョンの ini に無い設定欄 ([sources] [imap] など) を末尾に追記する
+    sections = re.findall(r"^\[(\w+)\]", TEMPLATE, re.M)
+    for i, sec in enumerate(sections):
+        if not user.has_section(sec):
+            start = TEMPLATE.index(f"\n[{sec}]") + 1
+            end = TEMPLATE.index(f"\n[{sections[i + 1]}]") + 1 if i + 1 < len(sections) else len(TEMPLATE)
+            with INI.open("a", encoding="utf-8") as f:
+                f.write("\n" + TEMPLATE[start:end])
     cp = configparser.ConfigParser()
     cp.read_string(TEMPLATE)
     cp.read(INI, encoding="utf-8")

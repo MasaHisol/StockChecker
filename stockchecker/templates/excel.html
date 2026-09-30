@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head"><div><h1>Excel 一括登録</h1><div class="sub">部材と仕入先を Excel でまとめて登録・更新します。取り込む前に内容を確認できます。</div></div></div>
+<div class="grid g3">
+  <div class="card"><h2>① テンプレートを入手</h2>
+    <p class="small muted" style="margin-top:0">「部材」「仕入先」シートと記入方法の説明付きです。</p>
+    <a class="btn" href="{{ url_for('excel_template') }}">テンプレートをダウンロード</a></div>
+  <div class="card"><h2>または 今の部材一覧を出力</h2>
+    <p class="small muted" style="margin-top:0">出力したファイルを編集してそのまま取り込めます (品番で照合して更新)。</p>
+    <a class="btn ghost" href="{{ url_for('excel_export') }}">部材一覧を Excel で出力</a></div>
+  <form method="post" action="{{ url_for('excel_upload') }}" enctype="multipart/form-data" class="card"><h2>② 記入したファイルを取り込む</h2>
+    <input type="file" name="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+    <p style="margin-bottom:0"><button data-busy="読み込み中…">内容を確認する</button></p>
+    <div class="hint">次の画面で「新規・更新・エラー」を確認してから反映します。</div></form>
+</div>
+<div class="card">
+  <h2>ルール</h2>
+  <ul class="reasons" style="font-size:13px">
+    <li>部材は <b>品番</b>、仕入先は <b>社名</b> で照合し、既にあれば更新・無ければ新規登録します。</li>
+    <li>更新では、Excel で<b>空欄の項目は変更しません</b> (消したい場合は画面で編集してください)。</li>
+    <li>担当者は「担当者・仕入先」に登録済みの氏名かメール、主仕入先は登録済みか「仕入先」シートにある社名を書きます。</li>
+    <li>「現在の単価」「現在の納期」を書くと、価格の履歴に記録します。</li>
+    <li>反映した内容は操作履歴に「Excel 取込」として残ります。</li>
+  </ul>
+</div>
+{% if batches %}<div class="card flush"><h2>最近の取り込み</h2><table><tbody>{% for b in batches %}
+  <tr><td class="small muted">{{ b.created_at[:16] }}</td><td><a href="{{ url_for('excel_preview', bid=b.id) }}">{{ b.filename }}</a></td><td class="small">{{ b.actor or '' }}</td>
+  <td>{% if b.status == 'applied' %}<span class="pill good">反映済</span>{% else %}<span class="pill warn">未反映</span>{% endif %}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
+{% endblock %}

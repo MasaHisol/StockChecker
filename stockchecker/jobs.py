@@ -50,7 +50,7 @@ def target_materials(conn, material_ids=None):
     return conn.execute(q + " ORDER BY id", args).fetchall()
 
 
-def start(settings, user_id=None, material_ids=None, run_async=True, sleep=time.sleep):
+def start(settings, user_id=None, material_ids=None, run_async=True, sleep=time.sleep, actor=None):
     """一括取得を開始してジョブ ID を返す。実行中なら既存の ID を返す (新規は False)。"""
     with _lock:
         conn = db.connect(settings.database)
@@ -59,10 +59,10 @@ def start(settings, user_id=None, material_ids=None, run_async=True, sleep=time.
             if cur:
                 return cur["id"], False
             mats = target_materials(conn, material_ids)
-            job_id = conn.execute("INSERT INTO fetch_jobs (total, started_by) VALUES (?, ?)",
-                                  (len(mats), user_id)).lastrowid
+            job_id = conn.execute("INSERT INTO fetch_jobs (total, started_by, started_by_name) VALUES (?, ?, ?)",
+                                  (len(mats), user_id, actor)).lastrowid
             conn.commit()
-            db.log_activity(conn, user_id, "fetch_start", detail=f"{len(mats)} 件の一括取得を開始")
+            db.log_activity(conn, user_id, "fetch_start", detail=f"{len(mats)} 件の一括取得を開始", actor=actor)
         finally:
             conn.close()
     args = (settings, job_id, [m["id"] for m in mats], sleep)
@@ -182,7 +182,8 @@ def run(settings, job_id, material_ids, sleep=time.sleep):
     session = pagereader.BrowserSession() if settings.page_watch_render else None
     try:
         fetcher = Fetcher(conn, settings, session=session, should_stop=stopped, sleep=sleep)
-        user = conn.execute("SELECT started_by FROM fetch_jobs WHERE id=?", (job_id,)).fetchone()[0]
+        jr = conn.execute("SELECT started_by, started_by_name FROM fetch_jobs WHERE id=?", (job_id,)).fetchone()
+        user, who = jr["started_by"], jr["started_by_name"]
         for mid in material_ids:
             if stopped():
                 break
@@ -215,7 +216,7 @@ def run(settings, job_id, material_ids, sleep=time.sleep):
                      "finished_at=datetime('now','localtime') WHERE id=?",
                      ("cancelled" if cancelled else "done", msg, job_id))
         conn.commit()
-        db.log_activity(conn, user, "fetch_done", detail=("中止: " if cancelled else "") + msg)
+        db.log_activity(conn, user, "fetch_done", detail=("中止: " if cancelled else "") + msg, actor=who)
     except Exception as e:
         log.exception("fetch job failed")
         conn.execute("UPDATE fetch_jobs SET status='failed', message=?, "

@@ -1,18 +1,18 @@
+import io
 import json
 import logging
 import secrets
 import threading
 import time
 from datetime import date, datetime, timedelta
-from functools import wraps
 
 from flask import (Flask, abort, flash, g, jsonify, redirect, render_template, request, session,
                    url_for)
 from markupsafe import Markup
-from werkzeug.security import check_password_hash, generate_password_hash
 
-from . import (db, free_sources, jobs, mailflow, pagereader, reminders, service, sources,
-               throttle)
+from . import (db, excel, free_sources, jobs, mailflow, orders, pagereader, reminders, service,
+               sources, throttle)
+from . import inbox as inbox_mod
 from .config import Settings
 from .providers import parse_price_csv
 
@@ -29,7 +29,13 @@ ACTION_LABELS = {"material_new": "部材を登録", "material_edit": "部材を�
                  "observation": "価格・納期を記録", "watch_add": "監視ページを登録", "fetch_one": "最新価格を取得",
                  "fetch_start": "一括取得を開始", "fetch_done": "一括取得が完了", "email_draft": "メール下書き",
                  "email_sent": "メール送信", "answered": "回答を記録", "comment": "コメント",
-                 "confirmed": "確認済みにする", "login": "ログイン"}
+                 "confirmed": "確認済みにする", "order_new": "発注を記録", "order_eta": "納期回答を記録",
+                 "order_receive": "入荷を記録", "order_cancel": "発注をキャンセル", "mail_received": "返信を受信",
+                 "mail_import": "受信メールを取込", "mail_ignore": "受信メールを対応不要に", "excel_import": "Excel 取込",
+                 "excel_export": "Excel 出力", "csv_import": "CSV 取込", "settings": "設定を変更",
+                 "template": "テンプレートを変更", "staff_new": "担当者を追加", "staff_edit": "担当者を変更",
+                 "supplier_new": "仕入先を追加", "supplier_edit": "仕入先を変更", "alert_resolve": "アラートを対応済みに",
+                 "email_discard": "下書きを破棄", "watch_remove": "監視ページを外す"}
 PERIODS = {"90": "3 か月", "180": "6 か月", "365": "1 年", "0": "全期間"}
 
 
@@ -39,6 +45,31 @@ def _int(v):
 
 def _float(v):
     return float(str(v).replace(",", "")) if v not in (None, "") else None
+
+
+def changes_text(old, new, labels):
+    """変更点を「項目: 旧 → 新」の文字列にする (履歴用)。"""
+    parts = []
+    for k, label in labels.items():
+        if k not in new:
+            continue
+        o = old[k] if k in old.keys() else None
+        n = new[k]
+        if str(o if o is not None else "") != str(n if n is not None else ""):
+            parts.append(f"{label}: {o if o not in (None, '') else '(空)'} → {n if n not in (None, '') else '(空)'}")
+    return " / ".join(parts)
+
+
+SETTING_LABELS = {"fetch_default_delay": "アクセス間隔(秒)", "fetch_domain_delays": "サイトごとの間隔",
+                  "fetch_max_retries": "再試行回数", "fetch_backoff_seconds": "制限時の待ち時間",
+                  "confirm_interval_days": "既定の確認周期", "followup_days": "督促までの日数",
+                  "reply_days": "回答期限の日数", "auto_confirm_enabled": "確認メールの自動送信",
+                  "auto_followup_enabled": "督促の自動送信", "notify_owner": "担当者への通知"}
+MATERIAL_LABELS = {"part_number": "品番", "name": "品名", "maker": "メーカー", "spec": "仕様", "unit": "単位",
+                   "quantity": "数量", "required_date": "必要納期", "budget_unit_price": "予算単価",
+                   "custom_item": "特注品", "owner_id": "担当者", "preferred_supplier_id": "主仕入先",
+                   "notes": "備考", "watch_urls": "商品ページURL", "confirm_interval_days": "確認周期",
+                   "auto_confirm": "自動確認メール"}
 
 
 def yen(v):
@@ -53,6 +84,7 @@ def create_app(settings=None):
     app.config["SC"] = settings
     app.jinja_env.filters["fromjson"] = json.loads
     app.jinja_env.filters["yen"] = yen
+    app.jinja_env.filters["dict_without"] = lambda d, k: {x: y for x, y in d.items() if x != k}
     app.jinja_env.filters["chartpts"] = lambda series, key: [
         {"t": p["t"], "v": p[key], "s": p.get("v", "")} for p in series if p.get(key) is not None]
 
@@ -86,120 +118,60 @@ def create_app(settings=None):
             abort(404)
         return row
 
-    def uid():
-        return g.user["id"] if g.get("user") else None
-
-    def log_act(action, material_id=None, detail=None):
-        db.log_activity(conn(), uid(), action, material_id, detail)
-
-    # ================================================================ 認証
-    OPEN_ENDPOINTS = {"login", "setup", "static", "health"}
-
-    def has_users():
-        return conn().execute("SELECT 1 FROM staff WHERE password_hash IS NOT NULL AND active=1 "
-                              "LIMIT 1").fetchone() is not None
+    # ================================================================ 操作者 (ログインなし)
+    # 全員が同じ権限で使う。履歴に残す名前だけ、ブラウザごとに選んでもらう (Cookie に保存)。
+    OPERATOR_COOKIE = "sc_operator"
 
     @app.before_request
-    def _auth():
-        g.user = None
-        if not settings.auth:  # テスト・1 人利用向け: 最初の担当者として扱う
-            g.user = conn().execute("SELECT * FROM staff ORDER BY id LIMIT 1").fetchone()
-        elif session.get("uid"):
-            g.user = conn().execute("SELECT * FROM staff WHERE id=? AND active=1",
-                                    (session["uid"],)).fetchone()
-        if request.endpoint in OPEN_ENDPOINTS:
-            return None
-        if settings.auth:
-            if not has_users():
-                return redirect(url_for("setup"))
-            if g.user is None:
-                return redirect(url_for("login", next=request.full_path))
-        if settings.csrf and request.method == "POST":
+    def _operator():
+        g.user, g.actor = None, None
+        raw = request.cookies.get(OPERATOR_COOKIE, "")
+        if raw.startswith("id:") and raw[3:].isdigit():
+            g.user = conn().execute("SELECT * FROM staff WHERE id=?", (int(raw[3:]),)).fetchone()
+            g.actor = g.user["name"] if g.user else None
+        elif raw.startswith("name:"):
+            from urllib.parse import unquote
+            g.actor = unquote(raw[5:])[:40] or None
+        if settings.csrf and request.method == "POST" and request.endpoint not in ("static",):
             token = request.form.get("_csrf") or request.headers.get("X-CSRF-Token")
             if not token or token != session.get("csrf"):
                 abort(400, "画面を開き直してから、もう一度操作してください (CSRF)")
-        return None
 
-    def admin_required(f):
-        @wraps(f)
-        def wrapper(*a, **kw):
-            if settings.auth and (not g.user or g.user["role"] != "admin"):
-                flash("この操作は管理者のみ行えます。", "error")
-                return redirect(url_for("index"))
-            return f(*a, **kw)
-        return wrapper
+    def uid():
+        return g.user["id"] if g.get("user") else None
 
-    def login_user(user):
-        session.clear()
-        session.permanent = True
-        session["uid"] = user["id"]
-        conn().execute("UPDATE staff SET last_login_at=datetime('now','localtime') WHERE id=?", (user["id"],))
-        conn().commit()
+    def actor():
+        return g.get("actor") or "名前未設定"
+
+    def client():
+        return request.remote_addr
+
+    def log_act(action, material_id=None, detail=None):
+        db.log_activity(conn(), uid(), action, material_id, detail, actor(), client())
+
+    def kw():
+        """記録用の操作者情報 (他モジュールに渡す)。"""
+        return {"actor": actor(), "client": client()}
 
     @app.route("/health")
     def health():
         return "ok"
 
-    @app.route("/setup", methods=["GET", "POST"])
-    def setup():
-        if has_users():
-            return redirect(url_for("login"))
-        if request.method == "POST":
-            f = request.form
-            if len(f.get("password", "")) < 6:
-                flash("パスワードは 6 文字以上にしてください。", "error")
-                return render_template("setup.html")
-            c = conn()
-            ex = c.execute("SELECT id FROM staff WHERE lower(email)=lower(?)", (f["email"].strip(),)).fetchone()
-            ph = generate_password_hash(f["password"])
-            if ex:
-                c.execute("UPDATE staff SET name=?, password_hash=?, role='admin', active=1 WHERE id=?",
-                          (f["name"].strip(), ph, ex["id"]))
-                new_id = ex["id"]
-            else:
-                new_id = c.execute("INSERT INTO staff (name, email, password_hash, role) VALUES (?,?,?,'admin')",
-                                   (f["name"].strip(), f["email"].strip(), ph)).lastrowid
-            c.commit()
-            login_user(c.execute("SELECT * FROM staff WHERE id=?", (new_id,)).fetchone())
-            flash("管理者アカウントを作成しました。「担当者・仕入先」からチームのメンバーを追加できます。")
-            return redirect(url_for("index"))
-        return render_template("setup.html")
-
-    @app.route("/login", methods=["GET", "POST"])
-    def login():
-        if not has_users():
-            return redirect(url_for("setup"))
-        if request.method == "POST":
-            u = conn().execute("SELECT * FROM staff WHERE lower(email)=lower(?) AND active=1",
-                               (request.form.get("email", "").strip(),)).fetchone()
-            if u and u["password_hash"] and check_password_hash(u["password_hash"], request.form.get("password", "")):
-                login_user(u)
-                nxt = request.args.get("next") or ""
-                return redirect(nxt if nxt.startswith("/") and not nxt.startswith("//") else url_for("index"))
-            time.sleep(0.5)
-            flash("メールアドレスまたはパスワードが違います。", "error")
-        return render_template("login.html")
-
-    @app.post("/logout")
-    def logout():
-        session.clear()
-        return redirect(url_for("login"))
-
-    @app.route("/account", methods=["GET", "POST"])
-    def account():
-        if request.method == "POST":
-            f = request.form
-            if not check_password_hash(g.user["password_hash"] or "", f.get("current", "")):
-                flash("現在のパスワードが違います。", "error")
-            elif len(f.get("new", "")) < 6:
-                flash("新しいパスワードは 6 文字以上にしてください。", "error")
-            else:
-                conn().execute("UPDATE staff SET password_hash=? WHERE id=?",
-                               (generate_password_hash(f["new"]), uid()))
-                conn().commit()
-                flash("パスワードを変更しました。")
-                return redirect(url_for("index"))
-        return render_template("account.html")
+    @app.post("/operator")
+    def set_operator():
+        f = request.form
+        sid = _int(f.get("staff_id"))
+        name = (f.get("name") or "").strip()
+        resp = redirect(f.get("back") or request.referrer or url_for("index"))
+        from urllib.parse import quote
+        if sid:
+            value = f"id:{sid}"
+        elif name:
+            value = "name:" + quote(name[:40])
+        else:
+            value = "name:" + quote("名前未設定")
+        resp.set_cookie(OPERATOR_COOKIE, value, max_age=60 * 60 * 24 * 365, samesite="Lax", httponly=True)
+        return resp
 
     # ================================================================ 共通の表示データ
     def status_pill(s):
@@ -207,20 +179,33 @@ def create_app(settings=None):
                       "failed": ("crit", "送信失敗")}[s]
         return Markup(f'<span class="pill {cls}">{label}</span>')
 
+    def order_pill(o):
+        today = date.today().isoformat()
+        due = o["promised_date"] or o["required_date"]
+        if o["status"] in orders.OPEN and due and due < today:
+            cls, label = "crit", "入荷遅れ"
+        else:
+            cls, label = {"ordered": ("warn", "納期回答待ち"), "confirmed": ("info", "入荷待ち"),
+                          "partial": ("info", "一部入荷"), "received": ("good", "入荷済"),
+                          "cancelled": ("off", "キャンセル")}[o["status"]]
+        return Markup(f'<span class="pill {cls}">{label}</span>')
+
     @app.context_processor
     def _ctx():
-        if not g.get("user") and settings.auth:
-            return {"settings": settings, "csrf_token": _csrf_token()}
         c = conn()
         drafts = c.execute("SELECT COUNT(*) FROM emails WHERE status='draft'").fetchone()[0]
         todo = c.execute("SELECT COUNT(DISTINCT a.material_id) FROM alerts a JOIN materials m "
                          "ON m.id=a.material_id WHERE a.status='open' AND m.active=1").fetchone()[0]
+        inbox_new = c.execute("SELECT COUNT(*) FROM inbox WHERE status='new'").fetchone()[0]
+        late = c.execute("SELECT COUNT(*) FROM alerts WHERE status='open' AND kind IN ('delivery_late','order_no_eta')").fetchone()[0]
         return {"settings": settings, "sources": sources.source_status(settings),
-                "nav_counts": {"drafts": drafts, "todo": todo}, "kind_labels": mailflow.KINDS,
+                "nav_counts": {"drafts": drafts, "todo": todo, "inbox": inbox_new, "orders": late}, "kind_labels": mailflow.KINDS,
                 "source_labels": SOURCE_LABELS, "action_labels": ACTION_LABELS,
-                "status_pill": status_pill, "csrf_token": _csrf_token(), "me": g.get("user"),
-                "is_admin": (not settings.auth) or (g.get("user") and g.user["role"] == "admin"),
-                "running_job": jobs.current_job(c)}
+                "status_pill": status_pill, "order_pill": order_pill, "csrf_token": _csrf_token(), "me": g.get("user"),
+                "actor": g.get("actor"), "operator_set": request.cookies.get(OPERATOR_COOKIE) is not None,
+                "all_staff_for_operator": c.execute("SELECT id, name FROM staff WHERE active=1 ORDER BY name").fetchall(),
+                "running_job": jobs.current_job(c), "is_admin": True,
+                "order_labels": orders.STATUS}
 
     def _csrf_token():
         if "csrf" not in session:
@@ -259,6 +244,9 @@ def create_app(settings=None):
         open_alerts = {}
         for a in c.execute("SELECT * FROM alerts WHERE status='open'"):
             open_alerts.setdefault(a["material_id"], []).append(a)
+        open_orders = {}  # 部材ごとの未入荷の発注
+        for o in c.execute(f"SELECT o.* FROM orders o WHERE o.status IN {orders.OPEN} ORDER BY o.id"):
+            open_orders.setdefault(o["material_id"], []).append(o)
         pending = {}  # 部材ごとの、回答待ち・下書き中の見積依頼/確認メール
         for e in c.execute(
                 "SELECT e.id, e.kind, e.status, em.material_id FROM emails e JOIN email_materials em "
@@ -288,7 +276,7 @@ def create_app(settings=None):
                          "status": status, "delta": delta, "days_left": days_left,
                          "method": "web" if (m["watch_urls"] or "").strip() else "mail",
                          "confirm_due": due, "confirm_interval": interval, "reminders": reminders_,
-                         "pending": pending.get(m["id"])})
+                         "pending": pending.get(m["id"]), "orders": open_orders.get(m["id"], [])})
         return rows
 
     # ================================================================ ダッシュボード
@@ -297,21 +285,25 @@ def create_app(settings=None):
         c = conn()
         mine = request.args.get("mine") == "1"
         rows = material_rows("m.active=1 AND m.owner_id=?", (uid(),)) if mine else material_rows()
-        quote = [r for r in rows if r["needs_quote"]]
+        quote = [r for r in rows if r["needs_quote"] and not r["orders"]]  # 発注済みのものは除く
         confirm = [r for r in rows for a in r["reminders"] if a["kind"] == "confirm_due"]
         noreply = [(r, a) for r in rows for a in r["reminders"] if a["kind"] == "no_reply"]
+        order_alerts = [(r, a) for r in rows for a in r["reminders"] if a["kind"] in orders.ORDER_ALERTS]
+        n_open_orders = c.execute(f"SELECT COUNT(*) FROM orders WHERE status IN {orders.OPEN}").fetchone()[0]
+        n_inbox = c.execute("SELECT COUNT(*) FROM inbox WHERE status='new'").fetchone()[0]
         drafts = c.execute("SELECT e.*, s.name AS supplier_name FROM emails e LEFT JOIN suppliers s "
                            "ON s.id=e.supplier_id WHERE e.status='draft' ORDER BY e.id DESC LIMIT 20").fetchall()
-        last_job = c.execute("SELECT j.*, s.name AS user_name FROM fetch_jobs j LEFT JOIN staff s "
+        last_job = c.execute("SELECT j.*, COALESCE(j.started_by_name, s.name) AS user_name FROM fetch_jobs j LEFT JOIN staff s "
                              "ON s.id=j.started_by ORDER BY j.id DESC LIMIT 1").fetchone()
         job_errors = c.execute("SELECT i.*, m.part_number, m.name FROM fetch_job_items i JOIN materials m "
                                "ON m.id=i.material_id WHERE i.job_id=? AND i.status='error'",
                                (last_job["id"],)).fetchall() if last_job else []
-        activity = c.execute("SELECT a.*, s.name AS user_name, m.part_number FROM activity a "
+        activity = c.execute("SELECT a.*, COALESCE(a.actor, s.name) AS user_name, m.part_number FROM activity a "
                              "LEFT JOIN staff s ON s.id=a.user_id LEFT JOIN materials m ON m.id=a.material_id "
-                             "WHERE a.action NOT IN ('login') ORDER BY a.id DESC LIMIT 12").fetchall()
+                             "ORDER BY a.id DESC LIMIT 12").fetchall()
         web_targets = sum(1 for r in rows if r["method"] == "web")
         return render_template("index.html", rows=rows, quote=quote, confirm=confirm, noreply=noreply,
+                               order_alerts=order_alerts, n_open_orders=n_open_orders, n_inbox=n_inbox,
                                drafts=drafts, last_job=last_job, job_errors=job_errors,
                                activity=activity, mine=mine, web_targets=web_targets)
 
@@ -319,7 +311,7 @@ def create_app(settings=None):
     @app.post("/fetch")
     def fetch_start():
         ids = [int(i) for i in request.form.getlist("ids") if i.isdigit()] or None
-        job_id, new = jobs.start(settings, uid(), ids, run_async=settings.run_jobs_async)
+        job_id, new = jobs.start(settings, uid(), ids, run_async=settings.run_jobs_async, actor=actor())
         if not new:
             flash("別の一括取得が実行中です。完了までお待ちください。", "error")
         return redirect(request.form.get("back") or url_for("index"))
@@ -337,7 +329,7 @@ def create_app(settings=None):
 
     @app.route("/fetch/<int:job_id>")
     def fetch_result(job_id):
-        j = conn().execute("SELECT j.*, s.name AS user_name FROM fetch_jobs j LEFT JOIN staff s "
+        j = conn().execute("SELECT j.*, COALESCE(j.started_by_name, s.name) AS user_name FROM fetch_jobs j LEFT JOIN staff s "
                            "ON s.id=j.started_by WHERE j.id=?", (job_id,)).fetchone() or abort(404)
         items = conn().execute("SELECT i.*, m.part_number, m.name FROM fetch_job_items i "
                                "LEFT JOIN materials m ON m.id=i.material_id WHERE job_id=? "
@@ -360,14 +352,14 @@ def create_app(settings=None):
             flash("部材を選択してください。", "error")
             return redirect(url_for("materials"))
         if action == "fetch":
-            _, new = jobs.start(settings, uid(), ids, run_async=settings.run_jobs_async)
+            _, new = jobs.start(settings, uid(), ids, run_async=settings.run_jobs_async, actor=actor())
             if not new:
                 flash("別の一括取得が実行中です。", "error")
             return redirect(url_for("index"))
         if action in ("rfq", "confirm", "order"):
             mats = conn().execute(f"SELECT * FROM materials WHERE id IN ({','.join('?' * len(ids))})",
                                   ids).fetchall()
-            eids, missing = mailflow.create_bulk(conn(), action, mats, settings, uid())
+            eids, missing = mailflow.create_bulk(conn(), action, mats, settings, uid(), **kw())
             if missing:
                 flash("主仕入先が未設定のため作成できなかった部材: "
                       + ", ".join(m["part_number"] for m in missing), "error")
@@ -430,11 +422,21 @@ def create_app(settings=None):
     def material_edit(mid):
         m = get_or_404("materials", mid)
         if request.method == "POST":
-            sets = ", ".join(f"{c.strip()}=?" for c in COLS.split(","))
+            cols = [c.strip() for c in COLS.split(",")]
+            vals = material_form_values()
+            sets = ", ".join(f"{c}=?" for c in cols)
             conn().execute(f"UPDATE materials SET {sets}, updated_by=?, updated_at=datetime('now','localtime') "
-                           "WHERE id=?", material_form_values() + (uid(), mid))
+                           "WHERE id=?", vals + (uid(), mid))
             conn().commit()
-            log_act("material_edit", mid)
+            new = dict(zip(cols, vals))
+            names = {r["id"]: r["name"] for r in conn().execute("SELECT id, name FROM staff")}
+            sups = {r["id"]: r["name"] for r in conn().execute("SELECT id, name FROM suppliers")}
+            old = dict(m)
+            for d, key in ((names, "owner_id"), (sups, "preferred_supplier_id")):
+                old[key], new[key] = d.get(old[key]), d.get(new[key])
+            for key in ("custom_item", "auto_confirm"):
+                old[key], new[key] = ("はい" if old[key] else "いいえ"), ("はい" if new[key] else "いいえ")
+            log_act("material_edit", mid, changes_text(old, new, MATERIAL_LABELS) or "変更なし")
             return redirect(url_for("material_detail", mid=mid))
         return render_template("material_form.html", m=m, **masters())
 
@@ -460,16 +462,17 @@ def create_app(settings=None):
         waiting = [e for e in emails if e["status"] == "sent" and e["kind"] in mailflow.AWAIT_REPLY
                    and not e["answered_at"]]
         timeline = c.execute(
-            "SELECT 'act' AS type, a.created_at, a.action, a.detail AS body, s.name AS user_name FROM activity a "
-            "LEFT JOIN staff s ON s.id=a.user_id WHERE a.material_id=? "
-            "UNION ALL SELECT 'comment', c.created_at, 'comment', c.body, s.name FROM comments c "
+            "SELECT 'act' AS type, a.created_at, a.action, a.detail AS body, COALESCE(a.actor, s.name) AS user_name "
+            "FROM activity a LEFT JOIN staff s ON s.id=a.user_id WHERE a.material_id=? "
+            "UNION ALL SELECT 'comment', c.created_at, 'comment', c.body, COALESCE(c.actor, s.name) FROM comments c "
             "LEFT JOIN staff s ON s.id=c.user_id WHERE c.material_id=? ORDER BY 2 DESC LIMIT 60",
             (mid, mid)).fetchall()
         cfg = mailflow.reminder_config(c)
         interval, base, due = reminders.confirm_status(c, m, cfg)
         alerts = c.execute("SELECT * FROM alerts WHERE material_id=? AND status='open'", (mid,)).fetchall()
         series = price_series([mid])[mid]
-        return render_template("material_detail.html", m=m, obs=obs, findings=findings, emails=emails,
+        m_orders = orders.listing(c, "o.material_id=?", (mid,))
+        return render_template("material_detail.html", m_orders=m_orders, m=m, obs=obs, findings=findings, emails=emails,
                                waiting=waiting, timeline=timeline, series=series, alerts=alerts,
                                confirm=(interval, base, due), cfg=cfg, today=date.today(), **masters())
 
@@ -482,7 +485,7 @@ def create_app(settings=None):
                            supplier_id=_int(f.get("supplier_id")), stock_qty=_int(f.get("stock_qty")),
                            min_order_qty=_int(f.get("min_order_qty")), created_by=uid())
         if src == "quote":
-            mailflow.record_quote_answer(conn(), mid, uid())
+            mailflow.record_quote_answer(conn(), mid, uid(), **kw())
         log_act("observation", mid, f"単価 {f.get('unit_price') or '—'} / 納期 {f.get('lead_time_days') or '—'} 日"
                 + (" (見積回答)" if src == "quote" else ""))
         flash("価格・納期を記録しました。" + (" 回答待ちのメールを回答済みにしました。" if src == "quote" else ""))
@@ -491,7 +494,7 @@ def create_app(settings=None):
     @app.post("/materials/<int:mid>/confirmed")
     def mark_confirmed(mid):
         get_or_404("materials", mid)
-        mailflow.record_quote_answer(conn(), mid, uid())
+        mailflow.record_quote_answer(conn(), mid, uid(), **kw())
         log_act("confirmed", mid, request.form.get("note") or "電話などで確認済み")
         flash("確認済みにしました。次回の確認期限を更新しました。")
         return redirect(url_for("material_detail", mid=mid))
@@ -501,7 +504,7 @@ def create_app(settings=None):
         get_or_404("materials", mid)
         body = request.form.get("body", "").strip()
         if body:
-            conn().execute("INSERT INTO comments (material_id, user_id, body) VALUES (?,?,?)", (mid, uid(), body))
+            conn().execute("INSERT INTO comments (material_id, user_id, body, actor) VALUES (?,?,?,?)", (mid, uid(), body, actor()))
             conn().commit()
         return redirect(url_for("material_detail", mid=mid) + "#timeline")
 
@@ -616,6 +619,7 @@ def create_app(settings=None):
         urls = [u.strip() for u in (m["watch_urls"] or "").splitlines() if u.strip() and u.strip() != url]
         conn().execute("UPDATE materials SET watch_urls=? WHERE id=?", ("\n".join(urls) or None, mid))
         conn().commit()
+        log_act("watch_remove", mid, url)
         flash("監視ページを外しました。")
         return redirect(url_for("material_detail", mid=mid))
 
@@ -628,7 +632,7 @@ def create_app(settings=None):
         f = request.form
         if kind == "followup":
             e = get_or_404("emails", _int(f.get("email_id")) or 0)
-            eid = mailflow.create_followup(conn(), e, settings, uid())
+            eid = mailflow.create_followup(conn(), e, settings, uid(), **kw())
             return redirect(url_for("email_edit", eid=eid))
         sid = _int(f.get("supplier_id")) or m["preferred_supplier_id"]
         if not sid:
@@ -642,9 +646,9 @@ def create_app(settings=None):
             if price is None and last:
                 price = last["unit_price"]
             eid = service.create_order(conn(), m, sup, settings, qty, price or 0,
-                                       f.get("delivery_date") or m["required_date"] or "別途ご相談", uid())
+                                       f.get("delivery_date") or m["required_date"] or "別途ご相談", uid(), **kw())
         else:
-            eid = mailflow.create(conn(), kind, sup, [m], settings, uid())
+            eid = mailflow.create(conn(), kind, sup, [m], settings, uid(), **kw())
         return redirect(url_for("email_edit", eid=eid))
 
     # ================================================================ 価格推移 (グラフ)
@@ -699,6 +703,7 @@ def create_app(settings=None):
                                    min_order_qty=r["min_order_qty"], currency=r["currency"],
                                    observed_at=r["observed_at"], created_by=uid())
                 ok += 1
+            log_act("csv_import", None, f"価格表 CSV を {ok} 件取り込み")
             flash(f"{ok} 件取り込みました。" + (f" 未登録の品番: {', '.join(missing)}" if missing else ""))
             return redirect(url_for("materials"))
         return render_template("import.html", **masters())
@@ -710,55 +715,50 @@ def create_app(settings=None):
         if request.method == "POST":
             f = request.form
             if f["type"] == "staff":
-                if settings.auth and g.user["role"] != "admin":
-                    flash("メンバーの追加は管理者のみ行えます。", "error")
-                    return redirect(url_for("master_page"))
-                pw = f.get("password") or ""
-                c.execute("INSERT INTO staff (name, email, slack_webhook, password_hash, role) VALUES (?,?,?,?,?)",
-                          (f["name"], f["email"], f.get("slack_webhook") or None,
-                           generate_password_hash(pw) if pw else None, f.get("role") or "member"))
-                flash(f"{f['name']} さんを追加しました。" + (" ログイン用のメールアドレスとパスワードを本人に伝えてください。" if pw else ""))
+                c.execute("INSERT INTO staff (name, email, slack_webhook) VALUES (?,?,?)",
+                          (f["name"], f["email"], f.get("slack_webhook") or None))
+                log_act("staff_new", None, f"{f['name']} ({f['email']})")
+                flash(f"{f['name']} さんを担当者に追加しました。")
             else:
                 c.execute("INSERT INTO suppliers (name, contact_name, email, auto_send_rfq) VALUES (?,?,?,?)",
                           (f["name"], f.get("contact_name") or None, f["email"], 1 if f.get("auto_send_rfq") else 0))
+                log_act("supplier_new", None, f"{f['name']} ({f['email']})")
             c.commit()
             return redirect(url_for("master_page"))
         all_staff = c.execute("SELECT * FROM staff ORDER BY active DESC, name").fetchall()
         return render_template("masters.html", all_staff=all_staff, **masters())
 
     @app.post("/staff/<int:sid>")
-    @admin_required
     def staff_update(sid):
         s = get_or_404("staff", sid)
         f = request.form
-        if f.get("action") == "password" and f.get("password"):
-            conn().execute("UPDATE staff SET password_hash=? WHERE id=?", (generate_password_hash(f["password"]), sid))
-            flash(f"{s['name']} さんのパスワードを設定しました。")
-        elif f.get("action") == "role":
-            if sid == uid() and f.get("role") != "admin":
-                flash("自分自身の管理者権限は外せません。", "error")
-            else:
-                conn().execute("UPDATE staff SET role=? WHERE id=?", (f.get("role"), sid))
-        elif f.get("action") == "toggle":
-            if sid == uid():
-                flash("自分自身は無効にできません。", "error")
-            else:
-                conn().execute("UPDATE staff SET active=1-active WHERE id=?", (sid,))
-        elif f.get("action") == "edit":
+        if f.get("action") == "toggle":
+            conn().execute("UPDATE staff SET active=1-active WHERE id=?", (sid,))
+            log_act("staff_edit", None, f"{s['name']} を{'無効' if s['active'] else '有効'}にしました")
+        else:
+            new = {"name": f["name"], "email": f["email"], "slack_webhook": f.get("slack_webhook") or None}
             conn().execute("UPDATE staff SET name=?, email=?, slack_webhook=? WHERE id=?",
-                           (f["name"], f["email"], f.get("slack_webhook") or None, sid))
+                           (new["name"], new["email"], new["slack_webhook"], sid))
+            ch = changes_text(s, new, {"name": "氏名", "email": "メール", "slack_webhook": "チャット通知"})
+            if ch:
+                log_act("staff_edit", None, f"{s['name']}: {ch}")
         conn().commit()
         return redirect(url_for("master_page"))
 
     @app.post("/suppliers/<int:sid>")
     def supplier_update(sid):
-        get_or_404("suppliers", sid)
+        s = get_or_404("suppliers", sid)
         f = request.form
         if f.get("action") == "toggle-auto":
             conn().execute("UPDATE suppliers SET auto_send_rfq = 1 - auto_send_rfq WHERE id=?", (sid,))
+            log_act("supplier_edit", None, f"{s['name']}: 見積依頼の自動送信を{'OFF' if s['auto_send_rfq'] else 'ON'}")
         else:
+            new = {"name": f["name"], "contact_name": f.get("contact_name") or None, "email": f["email"]}
             conn().execute("UPDATE suppliers SET name=?, contact_name=?, email=? WHERE id=?",
-                           (f["name"], f.get("contact_name") or None, f["email"], sid))
+                           (new["name"], new["contact_name"], new["email"], sid))
+            ch = changes_text(s, new, {"name": "社名", "contact_name": "ご担当者", "email": "メール"})
+            if ch:
+                log_act("supplier_edit", None, f"{s['name']}: {ch}")
         conn().commit()
         return redirect(url_for("master_page"))
 
@@ -794,20 +794,23 @@ def create_app(settings=None):
                 conn().commit()
             action = f.get("action")
             if action == "send":
-                ok = service.send_email(conn(), eid, settings, uid())
+                ok = service.send_email(conn(), eid, settings, uid(), **kw())
                 flash("送信しました。" + ("" if settings.smtp_host else
                                        f" (SMTP 未設定のため {settings.outbox_dir} に .eml として保存しました)")
                       if ok else "送信に失敗しました。エラー内容を確認してください。", "message" if ok else "error")
             elif action == "discard":
+                linked = [m["id"] for m in mailflow.linked_materials(conn(), eid)] or [e["material_id"]]
                 conn().execute("DELETE FROM emails WHERE id=? AND status!='sent'", (eid,))
                 conn().commit()
+                for mid_ in linked:
+                    log_act("email_discard", mid_, f"下書きを破棄「{e['subject'][:50]}」")
                 flash("下書きを破棄しました。")
                 return redirect(url_for("emails"))
             elif action == "answered":
-                mailflow.mark_answered(conn(), eid, uid())
+                mailflow.mark_answered(conn(), eid, uid(), **kw())
                 flash("回答ありとして記録しました。価格・納期が届いた場合は部材画面で「見積回答」を記録してください。")
             elif action == "followup":
-                fid = mailflow.create_followup(conn(), e, settings, uid())
+                fid = mailflow.create_followup(conn(), e, settings, uid(), **kw())
                 return redirect(url_for("email_edit", eid=fid))
             else:
                 flash("保存しました。")
@@ -819,18 +822,20 @@ def create_app(settings=None):
 
     @app.post("/alerts/<int:aid>/resolve")
     def alert_resolve(aid):
+        a = get_or_404("alerts", aid)
         conn().execute("UPDATE alerts SET status='resolved' WHERE id=?", (aid,))
+        log_act("alert_resolve", a["material_id"], a["message"][:80])
         conn().commit()
         return redirect(request.referrer or url_for("index"))
 
     # ================================================================ 設定 (管理者)
     @app.route("/settings", methods=["GET", "POST"])
-    @admin_required
     def settings_page():
         c = conn()
         if request.method == "POST":
             f = request.form
             keys = list(jobs.FETCH_DEFAULTS) + list(mailflow.REMINDER_DEFAULTS)
+            before = {**jobs.fetch_config(c), **mailflow.reminder_config(c)}
             for k in keys:
                 if k in f:
                     v = f.get(k, "").strip()
@@ -839,6 +844,10 @@ def create_app(settings=None):
                     db.set_setting(c, k, v)
                 elif k in ("auto_confirm_enabled", "auto_followup_enabled", "notify_owner"):
                     db.set_setting(c, k, "0")
+            after = {**jobs.fetch_config(c), **mailflow.reminder_config(c)}
+            ch = changes_text(before, after, SETTING_LABELS)
+            if ch:
+                log_act("settings", None, ch)
             flash("設定を保存しました。")
             return redirect(url_for("settings_page"))
         return render_template("settings.html", fetch=jobs.fetch_config(c), rem=mailflow.reminder_config(c),
@@ -846,7 +855,6 @@ def create_app(settings=None):
                                lan_urls=settings.lan_urls)
 
     @app.route("/settings/templates", methods=["GET", "POST"])
-    @admin_required
     def templates_page():
         c = conn()
         kind = request.args.get("kind", "rfq")
@@ -855,11 +863,13 @@ def create_app(settings=None):
         if request.method == "POST":
             if request.form.get("action") == "reset":
                 c.execute("DELETE FROM mail_templates WHERE kind=?", (kind,))
+                log_act("template", None, f"{mailflow.KINDS[kind]}のテンプレートを既定に戻しました")
                 flash("既定の文面に戻しました。")
             else:
                 c.execute("INSERT OR REPLACE INTO mail_templates (kind, subject, body, updated_by, updated_at) "
                           "VALUES (?,?,?,?,datetime('now','localtime'))",
                           (kind, request.form["subject"], request.form["body"], uid()))
+                log_act("template", None, f"{mailflow.KINDS[kind]}のテンプレートを変更しました")
                 flash("テンプレートを保存しました。")
             c.commit()
             return redirect(url_for("templates_page", kind=kind))
@@ -920,6 +930,275 @@ def create_app(settings=None):
         except pagereader.FetchError as e:
             flash(f"ページを開けませんでした: {e}", "error")
         return redirect(url_for("sources_page", test_url=url))
+
+    # ================================================================ 発注・入荷
+    @app.route("/orders")
+    def orders_page():
+        tab = request.args.get("tab", "open")
+        today = date.today().isoformat()
+        where = {"open": f"o.status IN {orders.OPEN}",
+                 "late": f"o.status IN {orders.OPEN} AND COALESCE(o.promised_date, o.required_date) < '{today}'",
+                 "noeta": "o.status='ordered'",
+                 "done": "o.status IN ('received','cancelled')", "all": "1=1"}.get(tab, "1=1")
+        rows = orders.listing(conn(), where)
+        counts = {k: conn().execute(f"SELECT COUNT(*) FROM orders o WHERE {w}").fetchone()[0] for k, w in {
+            "open": f"o.status IN {orders.OPEN}", "noeta": "o.status='ordered'",
+            "late": f"o.status IN {orders.OPEN} AND COALESCE(o.promised_date, o.required_date) < '{today}'"}.items()}
+        return render_template("orders.html", rows=rows, tab=tab, counts=counts, today=today)
+
+    @app.route("/orders/<int:oid>")
+    def order_detail(oid):
+        o = orders.get(conn(), oid) or abort(404)
+        receipts = conn().execute("SELECT * FROM receipts WHERE order_id=? ORDER BY id", (oid,)).fetchall()
+        mails = conn().execute("SELECT DISTINCT e.* FROM emails e JOIN email_materials em ON em.email_id=e.id "
+                               "WHERE em.order_id=? OR e.id=? ORDER BY e.id", (oid, o["email_id"] or 0)).fetchall()
+        hist = conn().execute("SELECT * FROM activity WHERE material_id=? AND action LIKE 'order%' "
+                              "AND created_at >= ? ORDER BY id DESC", (o["material_id"], o["created_at"])).fetchall()
+        return render_template("order_detail.html", o=o, receipts=receipts, mails=mails, hist=hist,
+                               today=date.today().isoformat())
+
+    @app.post("/materials/<int:mid>/order-record")
+    def order_record(mid):
+        m = get_or_404("materials", mid)
+        f = request.form
+        oid = orders.create(conn(), mid, _int(f.get("supplier_id")), _int(f.get("quantity")) or m["quantity"],
+                            _float(f.get("unit_price")), f.get("order_date") or None,
+                            f.get("required_date") or m["required_date"], note=f.get("note") or None,
+                            user_id=uid(), **kw())
+        flash("発注を記録しました。納期回答が届いたら「回答納期」を、入荷したら「入荷」を記録してください。")
+        return redirect(url_for("order_detail", oid=oid))
+
+    @app.post("/orders/<int:oid>/<action>")
+    def order_action(oid, action):
+        o = orders.get(conn(), oid) or abort(404)
+        f = request.form
+        if action == "eta" and f.get("promised_date"):
+            orders.set_eta(conn(), oid, f["promised_date"], uid(), **kw(), note=f.get("note") or None)
+            flash(f"回答納期 {f['promised_date']} を記録しました。")
+        elif action == "receive":
+            qty = _int(f.get("quantity")) or (o["quantity"] - o["received_qty"])
+            st = orders.receive(conn(), oid, qty, f.get("received_date") or None, f.get("note") or None, uid(), **kw())
+            flash("入荷を記録しました。" + (" すべて入荷済みです。" if st == "received" else " 残りは引き続き入荷待ちです。"))
+        elif action == "cancel":
+            orders.cancel(conn(), oid, f.get("note") or None, uid(), **kw())
+            flash("発注をキャンセルにしました。")
+        elif action == "inquiry":
+            eid = mailflow.create_delivery_inquiry(conn(), o, settings, uid(), **kw())
+            if eid:
+                return redirect(url_for("email_edit", eid=eid))
+            flash("仕入先が未設定のため、納期確認メールを作成できません。", "error")
+        return redirect(request.form.get("back") or url_for("order_detail", oid=oid))
+
+    # ================================================================ 受信メール
+    @app.route("/inbox")
+    def inbox_page():
+        tab = request.args.get("tab", "new")
+        where = {"new": "i.status='new'", "applied": "i.status='applied'", "ignored": "i.status='ignored'"}.get(tab, "1=1")
+        rows = conn().execute(
+            "SELECT i.*, e.subject AS matched_subject, e.kind AS matched_kind, s.name AS supplier_name FROM inbox i "
+            "LEFT JOIN emails e ON e.id=i.matched_email_id LEFT JOIN suppliers s ON s.id=i.supplier_id "
+            f"WHERE {where} ORDER BY COALESCE(i.received_at, i.created_at) DESC LIMIT 300").fetchall()
+        counts = {"new": conn().execute("SELECT COUNT(*) FROM inbox WHERE status='new'").fetchone()[0]}
+        return render_template("inbox.html", rows=rows, tab=tab, counts=counts,
+                               imap_on=inbox_mod.imap_configured(settings))
+
+    @app.post("/inbox/upload")
+    def inbox_upload():
+        n_new, n_match, bad = 0, 0, []
+        for fs in request.files.getlist("files"):
+            if not fs or not fs.filename:
+                continue
+            try:
+                p = inbox_mod.parse_file(fs.filename, fs.read())
+            except Exception as e:
+                bad.append(f"{fs.filename} ({pagereader.short(e, 80)})")
+                continue
+            iid, new = inbox_mod.store(conn(), p, "upload", actor())
+            if new:
+                n_new += 1
+                n_match += 1 if conn().execute("SELECT matched_email_id FROM inbox WHERE id=?", (iid,)).fetchone()[0] else 0
+        log_act("mail_import", None, f"受信メールを {n_new} 件取り込み (対応付け {n_match} 件)")
+        flash(f"{n_new} 件取り込みました (送ったメールと対応付けできたもの {n_match} 件)。"
+              + (" 読めなかったファイル: " + ", ".join(bad) if bad else ""), "error" if bad else "message")
+        return redirect(url_for("inbox_page"))
+
+    @app.post("/inbox/imap")
+    def inbox_imap():
+        try:
+            s = inbox_mod.fetch_imap(conn(), settings, days=_int(request.form.get("days")) or 14, actor=actor())
+        except Exception as e:
+            flash(f"メールサーバーから取得できませんでした: {pagereader.short(e)}", "error")
+            return redirect(url_for("inbox_page"))
+        log_act("mail_import", None, f"メールサーバーから {s['imported']} 件取り込み (確認 {s['checked']} 件)")
+        flash(f"直近のメール {s['checked']} 件を確認し、仕入先からのメール {s['imported']} 件を取り込みました"
+              f" (送ったメールと対応付け {s['matched']} 件)。")
+        return redirect(url_for("inbox_page"))
+
+    @app.route("/inbox/<int:iid>")
+    def inbox_detail(iid):
+        r = get_or_404("inbox", iid)
+        ext = json.loads(r["extracted"] or "{}")
+        matched = conn().execute("SELECT * FROM emails WHERE id=?", (r["matched_email_id"],)).fetchone() \
+            if r["matched_email_id"] else None
+        candidates = conn().execute(
+            "SELECT e.*, s.name AS supplier_name FROM emails e LEFT JOIN suppliers s ON s.id=e.supplier_id "
+            "WHERE e.status='sent' AND e.kind!='alert' ORDER BY (e.supplier_id=?) DESC, e.sent_at DESC LIMIT 40",
+            (r["supplier_id"] or 0,)).fetchall()
+        return render_template("inbox_detail.html", r=r, ext=ext, matched=matched, candidates=candidates)
+
+    @app.post("/inbox/<int:iid>/<action>")
+    def inbox_action(iid, action):
+        r = get_or_404("inbox", iid)
+        f = request.form
+        if action == "match" and _int(f.get("email_id")):
+            inbox_mod.rematch(conn(), iid, _int(f.get("email_id")))
+            flash("対応するメールを変更しました。抽出結果を確認してください。")
+            return redirect(url_for("inbox_detail", iid=iid))
+        if action == "ignore":
+            conn().execute("UPDATE inbox SET status='ignored', handled_by=?, handled_at=datetime('now','localtime') "
+                           "WHERE id=?", (actor(), iid))
+            conn().commit()
+            log_act("mail_ignore", None, f"受信メール「{(r['subject'] or '')[:40]}」を対応不要にしました")
+            return redirect(url_for("inbox_page"))
+        if action == "apply":
+            ext = json.loads(r["extracted"] or "{}")
+            values = []
+            for it in ext.get("items", []):
+                mid = it["material_id"]
+                if not f.get(f"use_{mid}"):
+                    continue
+                values.append({"material_id": mid, "unit_price": _float(f.get(f"price_{mid}")),
+                               "lead_time_days": _int(f.get(f"lead_{mid}")),
+                               "promised_date": f.get(f"eta_{mid}") or None,
+                               "tax_included": bool(f.get(f"tax_{mid}")), "unchanged": bool(f.get(f"same_{mid}")),
+                               "order_id": it.get("order_id")})
+            done = inbox_mod.apply(conn(), iid, values, **kw())
+            flash(f"{len(done)} 件の部材に反映しました。" if done else "反映する値がありませんでした。対応済みにしました。")
+            return redirect(url_for("inbox_page"))
+        abort(404)
+
+    # ================================================================ Excel
+    def xlsx(data, name):
+        from flask import send_file
+        return send_file(io.BytesIO(data), as_attachment=True, download_name=name,
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    @app.route("/excel")
+    def excel_page():
+        batches = conn().execute("SELECT id, filename, status, actor, created_at FROM import_batches "
+                                 "ORDER BY id DESC LIMIT 10").fetchall()
+        return render_template("excel.html", batches=batches)
+
+    @app.route("/excel/template.xlsx")
+    def excel_template():
+        return xlsx(excel.template(), "部材一括登録テンプレート.xlsx")
+
+    @app.route("/excel/materials.xlsx")
+    def excel_export():
+        log_act("excel_export", None, "部材一覧を Excel で出力")
+        return xlsx(excel.export_materials(conn()), f"部材一覧_{date.today():%Y%m%d}.xlsx")
+
+    @app.post("/excel/upload")
+    def excel_upload():
+        fs = request.files.get("file")
+        if not fs or not fs.filename:
+            flash("Excel ファイルを選んでください。", "error")
+            return redirect(url_for("excel_page"))
+        try:
+            preview = excel.parse(conn(), fs.read())
+        except ValueError as e:
+            flash(str(e), "error")
+            return redirect(url_for("excel_page"))
+        bid = conn().execute("INSERT INTO import_batches (filename, data, actor) VALUES (?,?,?)",
+                             (fs.filename, excel.dumps(preview), actor())).lastrowid
+        conn().commit()
+        return redirect(url_for("excel_preview", bid=bid))
+
+    @app.route("/excel/preview/<int:bid>")
+    def excel_preview(bid):
+        b = get_or_404("import_batches", bid)
+        pv = json.loads(b["data"])
+        staff_names = {r["id"]: r["name"] for r in conn().execute("SELECT id, name FROM staff")}
+        sup_names = {r["id"]: r["name"] for r in conn().execute("SELECT id, name FROM suppliers")}
+        return render_template("excel_preview.html", b=b, pv=pv, labels=excel.FIELD_LABELS,
+                               describe=excel.describe_changes, staff_names=staff_names, sup_names=sup_names)
+
+    @app.post("/excel/apply/<int:bid>")
+    def excel_apply(bid):
+        b = get_or_404("import_batches", bid)
+        if b["status"] != "preview":
+            flash("この取り込みは反映済みです。", "error")
+            return redirect(url_for("excel_page"))
+        counts = excel.apply(conn(), json.loads(b["data"]), uid(), **kw())
+        conn().execute("UPDATE import_batches SET status='applied' WHERE id=?", (bid,))
+        conn().commit()
+        log_act("excel_import", None, f"Excel「{b['filename']}」を反映: 部材 新規 {counts['material_new']} / "
+                f"更新 {counts['material_update']} ・ 仕入先 新規 {counts['supplier_new']} / 更新 {counts['supplier_update']}"
+                f" ・ 価格 {counts['price']} 件")
+        flash(f"反映しました: 部材 新規 {counts['material_new']} 件 / 更新 {counts['material_update']} 件、"
+              f"仕入先 新規 {counts['supplier_new']} 件 / 更新 {counts['supplier_update']} 件、価格の記録 {counts['price']} 件")
+        return redirect(url_for("materials"))
+
+    @app.route("/charts.xlsx")
+    def charts_export():
+        period = request.args.get("period", "0")
+        since = (datetime.now() - timedelta(days=int(period))).strftime("%Y-%m-%d") if period not in ("0", "") else "0000"
+        rows = conn().execute(
+            "SELECT m.part_number, m.name, o.observed_at, o.unit_price, o.lead_time_days, o.stock_qty, o.vendor, "
+            "o.source, s.name FROM price_observations o JOIN materials m ON m.id=o.material_id "
+            "LEFT JOIN suppliers s ON s.id=o.supplier_id WHERE o.observed_at >= ? AND m.active=1 "
+            "ORDER BY m.part_number, o.observed_at", (since,)).fetchall()
+        data = excel.export_rows("価格推移", ["品番", "品名", "日時", "単価", "納期(日)", "在庫", "販売元", "取得元", "仕入先"],
+                                 [(r[0], r[1], r[2], r[3], r[4], r[5], r[6], SOURCE_LABELS.get(r[7], r[7]), r[8]) for r in rows])
+        return xlsx(data, f"価格推移_{date.today():%Y%m%d}.xlsx")
+
+    # ================================================================ 履歴
+    def history_query():
+        a = request.args
+        where, args = ["1=1"], []
+        if a.get("who"):
+            where.append("COALESCE(h.actor, s.name) = ?")
+            args.append(a["who"])
+        if a.get("action"):
+            where.append("h.action LIKE ?")
+            args.append(a["action"] + "%")
+        if a.get("q"):
+            where.append("(m.part_number LIKE ? OR m.name LIKE ? OR h.detail LIKE ?)")
+            args += [f"%{a['q']}%"] * 3
+        if a.get("from"):
+            where.append("h.created_at >= ?")
+            args.append(a["from"])
+        if a.get("to"):
+            where.append("h.created_at < date(?, '+1 day')")
+            args.append(a["to"])
+        return (" AND ".join(where), args)
+
+    HISTORY_SQL = ("SELECT h.*, COALESCE(h.actor, s.name, '自動') AS who, m.part_number, m.name AS material_name "
+                   "FROM activity h LEFT JOIN staff s ON s.id=h.user_id LEFT JOIN materials m ON m.id=h.material_id ")
+
+    @app.route("/history")
+    def history():
+        where, args = history_query()
+        page = max(1, _int(request.args.get("page")) or 1)
+        rows = conn().execute(HISTORY_SQL + f"WHERE {where} ORDER BY h.id DESC LIMIT 101 OFFSET ?",
+                              args + [(page - 1) * 100]).fetchall()
+        people = [r[0] for r in conn().execute("SELECT DISTINCT COALESCE(h.actor, s.name) FROM activity h "
+                                               "LEFT JOIN staff s ON s.id=h.user_id WHERE COALESCE(h.actor, s.name) "
+                                               "IS NOT NULL ORDER BY 1")]
+        groups = {"material": "部材", "order": "発注・入荷", "email": "メール", "fetch": "価格取得",
+                  "observation": "価格の記録", "mail": "受信メール", "excel": "Excel", "comment": "コメント",
+                  "settings": "設定", "supplier": "仕入先", "staff": "担当者"}
+        return render_template("history.html", rows=rows[:100], more=len(rows) > 100, page=page, people=people,
+                               groups=groups)
+
+    @app.route("/history.xlsx")
+    def history_export():
+        where, args = history_query()
+        rows = conn().execute(HISTORY_SQL + f"WHERE {where} ORDER BY h.id DESC LIMIT 20000", args).fetchall()
+        data = excel.export_rows("操作履歴", ["日時", "操作者", "操作", "品番", "品名", "内容", "端末"],
+                                 [(r["created_at"], r["who"], ACTION_LABELS.get(r["action"], r["action"]),
+                                   r["part_number"], r["material_name"], r["detail"], r["client"]) for r in rows])
+        return xlsx(data, f"操作履歴_{date.today():%Y%m%d}.xlsx")
 
     # ================================================================ リマインドの定期スキャン
     if settings.background:

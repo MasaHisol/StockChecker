@@ -2,4 +2,6 @@ flask>=3.0
 waitress>=3.0
 anthropic>=1.9
 playwright>=1.45
+openpyxl>=3.1
+extract-msg>=0.48
 pytest>=8.0

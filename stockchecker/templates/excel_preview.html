@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block body %}
+{% set mats = pv.materials %}
+{% set n_new = mats|selectattr('action','equalto','new')|list|length %}
+{% set n_upd = mats|selectattr('action','equalto','update')|list|length %}
+{% set n_err = mats|selectattr('action','equalto','error')|list|length + pv.suppliers|selectattr('action','equalto','error')|list|length %}
+<div class="page-head"><div>
+  <div class="sub"><a href="{{ url_for('excel_page') }}">Excel 一括登録</a> / 取り込み内容の確認</div>
+  <h1>取り込み内容の確認</h1><div class="sub">{{ b.filename }} ・ {{ b.created_at[:16] }}{% if b.actor %} ・ {{ b.actor }}{% endif %}</div></div>
+  {% if b.status == 'preview' and not pv.errors %}
+  <form method="post" action="{{ url_for('excel_apply', bid=b.id) }}"><button class="lg" data-busy="反映中…" {{ 'disabled' if not (n_new or n_upd or pv.suppliers|rejectattr('action','equalto','error')|list) }}>{{ n_new + n_upd }} 件の部材を反映する</button></form>
+  {% elif b.status == 'applied' %}<span class="pill good">反映済み</span>{% endif %}
+</div>
+{% for e in pv.errors %}<div class="flash error">{{ e }}</div>{% endfor %}
+<div class="kpis">
+  <div class="kpi"><div class="label"><span class="dot good"></span>新規登録</div><div class="value">{{ n_new }}<small>件</small></div></div>
+  <div class="kpi"><div class="label"><span class="dot info"></span>更新</div><div class="value">{{ n_upd }}<small>件</small></div></div>
+  <div class="kpi"><div class="label"><span class="dot crit"></span>エラー (取り込みません)</div><div class="value">{{ n_err }}<small>件</small></div></div>
+</div>
+{% if pv.warnings %}<div class="card small"><b>注意</b><ul class="reasons">{% for w in pv.warnings %}<li>{{ w }}</li>{% endfor %}</ul></div>{% endif %}
+{% if pv.suppliers %}
+<div class="card flush"><h2>仕入先</h2><div class="scroll"><table>
+  <thead><tr><th>行</th><th>結果</th><th>社名</th><th>内容</th></tr></thead><tbody>
+  {% for s in pv.suppliers %}<tr><td class="muted small">{{ s.row }}</td>
+    <td>{% if s.action == 'new' %}<span class="pill good">新規</span>{% elif s.action == 'update' %}<span class="pill {{ 'info' if s.changes else 'off' }}">{{ '更新' if s.changes else '変更なし' }}</span>{% else %}<span class="pill crit">エラー</span>{% endif %}</td>
+    <td>{{ s['values'].name }}</td>
+    <td class="small">{% if s.action == 'error' %}<span style="color:var(--crit)">{{ s.message }}</span>{% elif s.changes %}{{ describe(s.changes) }}{% else %}{{ s['values'].email }}{% endif %}</td></tr>{% endfor %}
+  </tbody></table></div></div>{% endif %}
+<div class="card flush"><h2>部材</h2><div class="scroll"><table>
+  <thead><tr><th>行</th><th>結果</th><th>品番 / 品名</th><th>内容</th></tr></thead><tbody>
+  {% for m in mats %}<tr><td class="muted small">{{ m.row }}</td>
+    <td>{% if m.action == 'new' %}<span class="pill good">新規</span>{% elif m.action == 'update' %}<span class="pill info">更新</span>{% elif m.action == 'same' %}<span class="pill off">変更なし</span>{% else %}<span class="pill crit">エラー</span>{% endif %}</td>
+    <td><b>{{ m['values'].part_number or '—' }}</b><div class="small muted">{{ m['values'].name or '' }}</div></td>
+    <td class="small">{% if m.action == 'error' %}<span style="color:var(--crit)">{{ m.message }}</span>
+      {% elif m.action == 'update' %}{{ describe(m.changes) if m.changes else '' }}
+      {% elif m.action == 'new' %}{% for k, v in m.fields.items() if k not in ('part_number','name') and v not in (none, '') %}{{ labels.get(k, {'owner_id':'担当者','preferred_supplier_id':'主仕入先','supplier_name':'主仕入先 (新規)'}.get(k, k)) }}: {{ staff_names.get(v, v) if k == 'owner_id' else (sup_names.get(v, v) if k == 'preferred_supplier_id' else ('はい' if v is sameas true else ('いいえ' if v is sameas false else v))) }}{{ ' / ' if not loop.last }}{% endfor %}{% endif %}
+      {% if m.current_price is not none or m.current_lead is not none %}<div class="muted">価格を記録: 単価 {{ m.current_price if m.current_price is not none else '—' }} / 納期 {{ m.current_lead if m.current_lead is not none else '—' }} 日</div>{% endif %}</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% if not mats %}<div class="empty">部材の行がありません。</div>{% endif %}</div>
+{% endblock %}

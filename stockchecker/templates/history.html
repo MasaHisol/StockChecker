@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block body %}
+{% set a = request.args %}
+<div class="page-head"><div><h1>操作履歴</h1><div class="sub">誰が・いつ・何をしたかの記録です。自動処理 (一括取得・リマインド・受信メールの取込) も残ります。</div></div>
+  <a class="btn ghost" href="{{ url_for('history_export', **a.to_dict()) }}">Excel で出力</a></div>
+<form method="get" class="card row" style="padding:12px 18px">
+  <select name="who" style="width:auto"><option value="">操作者: 全員</option>{% for p in people %}<option value="{{ p }}" {{ 'selected' if a.who == p }}>{{ p }}</option>{% endfor %}</select>
+  <select name="action" style="width:auto"><option value="">種類: すべて</option>{% for k, v in groups.items() %}<option value="{{ k }}" {{ 'selected' if a.action == k }}>{{ v }}</option>{% endfor %}</select>
+  <input type="date" name="from" value="{{ a['from'] or '' }}" style="width:auto" aria-label="開始日"><span class="muted">〜</span><input type="date" name="to" value="{{ a.to or '' }}" style="width:auto" aria-label="終了日">
+  <input type="search" name="q" value="{{ a.q or '' }}" placeholder="品番・品名・内容" style="max-width:220px">
+  <button class="sm">絞り込む</button>{% if a %}<a class="small" href="{{ url_for('history') }}">条件をクリア</a>{% endif %}
+</form>
+<div class="card flush">
+{% if rows %}
+<div class="scroll"><table>
+<thead><tr><th>日時</th><th>操作者</th><th>操作</th><th>部材</th><th>内容</th></tr></thead>
+<tbody>{% for r in rows %}
+<tr><td class="small muted nowrap">{{ r.created_at }}</td>
+  <td class="nowrap"><b>{{ r.who }}</b>{% if r.client %}<div class="small muted">{{ r.client }}</div>{% endif %}</td>
+  <td class="nowrap">{{ action_labels.get(r.action, r.action) }}</td>
+  <td class="nowrap">{% if r.material_id %}<a href="{{ url_for('material_detail', mid=r.material_id) }}">{{ r.part_number }}</a>{% endif %}</td>
+  <td class="small">{{ r.detail or '' }}</td></tr>
+{% endfor %}</tbody></table></div>
+<div class="row" style="padding:12px 18px;justify-content:space-between">
+  <span class="small muted">{{ (page - 1) * 100 + 1 }} 〜 {{ (page - 1) * 100 + rows|length }} 件目</span>
+  <div class="row">{% if page > 1 %}<a class="btn ghost sm" href="{{ url_for('history', page=page - 1, **a.to_dict()|dict_without('page')) }}">← 新しい</a>{% endif %}
+    {% if more %}<a class="btn ghost sm" href="{{ url_for('history', page=page + 1, **a.to_dict()|dict_without('page')) }}">古い →</a>{% endif %}</div></div>
+{% else %}<div class="empty">条件に合う履歴はありません。</div>{% endif %}
+</div>
+{% endblock %}

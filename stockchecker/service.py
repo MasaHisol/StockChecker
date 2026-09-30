@@ -20,37 +20,45 @@ def queue_email(conn, kind, to_addr, subject, body, material_id=None,
     return cur.lastrowid
 
 
-def send_email(conn, email_id, settings, user_id=None):
+def send_email(conn, email_id, settings, user_id=None, actor=None, client=None):
     row = conn.execute("SELECT * FROM emails WHERE id = ?", (email_id,)).fetchone()
     if row is None or row["status"] == "sent":
         return False
+    msg = mailer.to_message(row, settings)
     try:
-        where = mailer.deliver(mailer.to_message(row, settings), settings)
+        where = mailer.deliver(msg, settings)
     except Exception as e:  # SMTP エラー等は記録して継続
         log.exception("send failed")
         conn.execute("UPDATE emails SET status='failed', error=? WHERE id=?", (str(e), email_id))
         conn.commit()
         return False
+    # Message-ID を残しておくと、仕入先からの返信をこのメールに結び付けられる
     conn.execute(
-        "UPDATE emails SET status='sent', error=?, sent_at=datetime('now','localtime') WHERE id=?",
-        (f"delivered: {where}", email_id))
+        "UPDATE emails SET status='sent', error=?, message_id=?, sent_at=datetime('now','localtime') WHERE id=?",
+        (f"delivered: {where}", msg["Message-ID"], email_id))
     conn.commit()
     if row["kind"] != "alert":
+        who = actor if actor is not None else ("自動" if row["auto"] else None)
         for m in mailflow.linked_materials(conn, email_id):
             db.log_activity(conn, user_id if user_id is not None else row["created_by"], "email_sent",
                             m["id"], f"{mailflow.KINDS.get(row['kind'], row['kind'])}を送信 ({row['to_addr']})"
-                            + (" [自動]" if row["auto"] else ""))
+                            + (" [自動]" if row["auto"] else ""), who, client)
+    if row["kind"] == "order":
+        from . import orders
+        orders.create_from_email(conn, row, user_id, actor, client)
     return True
 
 
-def create_rfq(conn, material, supplier, settings, findings=(), user_id=None, auto=False):
-    return mailflow.create(conn, "rfq", supplier, [material], settings, user_id, auto=auto)
+def create_rfq(conn, material, supplier, settings, findings=(), user_id=None, auto=False,
+               actor=None, client=None):
+    return mailflow.create(conn, "rfq", supplier, [material], settings, user_id, auto=auto,
+                           actor=actor, client=client)
 
 
 def create_order(conn, material, supplier, settings, quantity, unit_price, delivery_date,
-                 user_id=None):
+                 user_id=None, actor=None, client=None):
     return mailflow.create(conn, "order", supplier, [(material, quantity, unit_price)], settings,
-                           user_id, extra={"delivery_date": delivery_date})
+                           user_id, extra={"delivery_date": delivery_date}, actor=actor, client=client)
 
 
 def _web_recently_checked(conn, material_id, days):

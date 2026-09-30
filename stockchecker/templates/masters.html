@@ -1,34 +1,27 @@
 {% extends "base.html" %}
 {% block body %}
-<div class="page-head"><div><h1>チーム・仕入先</h1><div class="sub">チームのメンバーは担当者としてアラートの通知先になり、ログインしてアプリを共有できます。</div></div></div>
+<div class="page-head"><div><h1>担当者・仕入先</h1><div class="sub">Excel でまとめて登録することもできます (<a href="{{ url_for('excel_page') }}">Excel 一括登録</a>)。</div></div></div>
 <div class="grid g2">
 <div>
-<div class="card flush"><div class="card-head"><h2>チームのメンバー (担当者)</h2></div>
-<div class="scroll"><table><thead><tr><th>氏名 / メール</th><th>権限</th><th>ログイン</th>{% if is_admin %}<th></th>{% endif %}</tr></thead><tbody>
+<div class="card flush"><div class="card-head"><h2>担当者</h2><span class="small muted">アラート・リマインドの通知先、操作者の名前の候補</span></div>
+<div class="scroll"><table><thead><tr><th>氏名 / メール</th><th>状態</th><th></th></tr></thead><tbody>
 {% for s in all_staff %}<tr style="{{ 'opacity:.5' if not s.active }}">
-  <td><b>{{ s.name }}</b>{% if me and s.id == me.id %} <span class="pill info">自分</span>{% endif %}<div class="small muted">{{ s.email }}</div>
-    {% if s.slack_webhook %}<span class="pill off">チャット通知あり</span>{% endif %}</td>
-  <td>{% if not s.active %}<span class="pill off">無効</span>{% elif s.role == 'admin' %}<span class="pill info">管理者</span>{% else %}<span class="pill off">メンバー</span>{% endif %}</td>
-  <td class="small muted nowrap">{% if not s.password_hash %}未設定{% else %}{{ (s.last_login_at or '未ログイン')[:16] }}{% endif %}</td>
-  {% if is_admin %}<td class="nowrap"><details><summary class="small">管理</summary>
-    <form method="post" action="{{ url_for('staff_update', sid=s.id) }}" class="row" style="margin-top:6px"><input type="hidden" name="action" value="password">
-      <input name="password" type="password" placeholder="新しいパスワード" minlength="6" required style="width:150px" autocomplete="new-password"><button class="sm">設定</button></form>
-    <form method="post" action="{{ url_for('staff_update', sid=s.id) }}" class="row" style="margin-top:6px"><input type="hidden" name="action" value="role">
-      <select name="role" style="width:auto"><option value="member" {{ 'selected' if s.role != 'admin' }}>メンバー</option><option value="admin" {{ 'selected' if s.role == 'admin' }}>管理者</option></select><button class="ghost sm">権限を変更</button></form>
+  <td><b>{{ s.name }}</b><div class="small muted">{{ s.email }}</div>{% if s.slack_webhook %}<span class="pill off">チャット通知あり</span>{% endif %}</td>
+  <td>{% if s.active %}<span class="pill good">有効</span>{% else %}<span class="pill off">無効</span>{% endif %}</td>
+  <td class="nowrap"><details><summary class="small">編集</summary>
+    <form method="post" action="{{ url_for('staff_update', sid=s.id) }}" style="margin-top:6px">
+      <input name="name" value="{{ s.name }}" required><input name="email" type="email" value="{{ s.email }}" required style="margin-top:4px">
+      <input name="slack_webhook" value="{{ s.slack_webhook or '' }}" placeholder="Slack / Teams Webhook URL" style="margin-top:4px">
+      <button class="sm" style="margin-top:6px">保存</button></form>
     <form method="post" action="{{ url_for('staff_update', sid=s.id) }}" style="margin-top:6px"><input type="hidden" name="action" value="toggle"><button class="danger sm">{{ '無効にする' if s.active else '有効に戻す' }}</button></form>
-  </details></td>{% endif %}
+  </details></td>
 </tr>{% endfor %}
 </tbody></table></div>
 {% if not all_staff %}<div class="empty">まだ登録がありません。</div>{% endif %}</div>
-{% if is_admin %}
-<form method="post" class="card"><input type="hidden" name="type" value="staff"><h2>メンバーを追加</h2>
-  <div class="form-grid"><div><label class="f">氏名</label><input name="name" required></div><div><label class="f">メール (ログイン ID)</label><input name="email" type="email" required></div></div>
-  <div class="form-grid"><div><label class="f">初期パスワード (6 文字以上)</label><input name="password" type="password" minlength="6" autocomplete="new-password"></div>
-    <div><label class="f">権限</label><select name="role"><option value="member">メンバー</option><option value="admin">管理者 (設定・メンバー管理)</option></select></div></div>
-  <label class="f">Slack / Teams の Incoming Webhook URL (任意・リマインドの通知先)</label><input name="slack_webhook">
-  <p><button>追加</button></p>
-  <div class="hint">パスワードを空欄にすると、通知先としてのみ登録します (ログイン不可)。</div></form>
-{% endif %}
+<form method="post" class="card"><input type="hidden" name="type" value="staff"><h2>担当者を追加</h2>
+  <div class="form-grid"><div><label class="f">氏名</label><input name="name" required></div><div><label class="f">メール (通知先)</label><input name="email" type="email" required></div></div>
+  <label class="f">Slack / Teams の Incoming Webhook URL (任意)</label><input name="slack_webhook">
+  <p><button>追加</button></p></form>
 </div>
 <div>
 <div class="card flush"><div class="card-head"><h2>仕入先</h2><span class="small muted">見積依頼・確認・注文の送り先</span></div>

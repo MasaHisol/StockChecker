@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head"><div>
+  <div class="sub"><a href="{{ url_for('inbox_page') }}">受信メール</a> / 返信の確認</div>
+  <h1>{{ r.subject or '(件名なし)' }}</h1>
+  <div class="sub">{{ r.from_name }} &lt;{{ r.from_addr }}&gt; ・ {{ (r.received_at or r.created_at)[:16] }} ・ {{ '反映済み' if r.status == 'applied' else ('対応不要' if r.status == 'ignored' else '未処理') }}</div></div></div>
+<div class="split">
+<div>
+  <div class="card">
+    <div class="card-head"><h2>対応する送信メール</h2>{% if r.match_method %}<span class="small muted">判定方法: {{ r.match_method }}</span>{% endif %}</div>
+    {% if matched %}<div><a href="{{ url_for('email_edit', eid=matched.id) }}">{{ matched.subject }}</a> <span class="pill info">{{ kind_labels[matched.kind] }}</span>
+      <span class="small muted">{{ (matched.sent_at or '')[:10] }} 送信</span></div>
+    {% else %}<p class="small" style="color:var(--warn);margin:0">送ったメールと自動で結び付けられませんでした。下で選んでください。</p>{% endif %}
+    <details {{ 'open' if not matched }} style="margin-top:8px"><summary class="small">別のメールを選ぶ</summary>
+      <form method="post" action="{{ url_for('inbox_action', iid=r.id, action='match') }}" class="row" style="margin-top:6px">
+        <select name="email_id" style="flex:1;min-width:240px" required>{% if not candidates %}<option value="">送信済みのメールがありません</option>{% endif %}{% for e in candidates %}<option value="{{ e.id }}" {{ 'selected' if matched and e.id == matched.id }}>{{ (e.sent_at or '')[:10] }} {{ kind_labels.get(e.kind, e.kind) }} ・ {{ e.supplier_name or e.to_addr }} ・ {{ e.subject[:50] }}</option>{% endfor %}</select>
+        <button class="ghost sm">このメールへの返信にする</button></form></details>
+  </div>
+
+  {% if ext['items'] %}
+  <form method="post" action="{{ url_for('inbox_action', iid=r.id, action='apply') }}" class="card flush">
+    <div class="card-head"><h2>読み取った内容</h2>{% if ext.order_accepted %}<span class="pill good">注文の受領・承諾の文面あり</span>{% endif %}</div>
+    <p class="small muted" style="padding:0 18px;margin:0 0 8px">本文から自動で読み取った値です。違っていれば直してから「反映」を押してください。チェックを外した部材は反映しません。</p>
+    <div class="scroll"><table>
+      <thead><tr><th class="check"></th><th>部材</th><th>単価 (円)</th><th>納期 (日)</th>{% if ext['items']|selectattr('order_id')|list %}<th>回答納期</th>{% endif %}<th>本文の該当箇所</th></tr></thead>
+      <tbody>{% for it in ext['items'] %}{% set mid = it.material_id %}
+      <tr>
+        <td class="check"><input type="checkbox" name="use_{{ mid }}" value="1" {{ 'checked' if it.unit_price is not none or it.lead_time_days is not none or it.promised_date or it.unchanged }} aria-label="反映する"></td>
+        <td class="nowrap"><a href="{{ url_for('material_detail', mid=mid) }}"><b>{{ it.part_number }}</b></a><div class="small muted">{{ it.name }}</div>
+          {% if not it.found %}<div class="small" style="color:var(--warn)">本文に品番が見つかりません</div>{% endif %}</td>
+        <td style="min-width:130px"><input name="price_{{ mid }}" value="{{ it.unit_price if it.unit_price is not none else '' }}" style="padding:5px 8px">
+          <label class="inline small" style="margin-top:4px"><input type="checkbox" name="tax_{{ mid }}" value="1" {{ 'checked' if it.tax_included }}>税込 (税抜に換算)</label></td>
+        <td style="min-width:90px"><input name="lead_{{ mid }}" type="number" value="{{ it.lead_time_days if it.lead_time_days is not none else '' }}" style="padding:5px 8px">
+          <label class="inline small" style="margin-top:4px"><input type="checkbox" name="same_{{ mid }}" value="1" {{ 'checked' if it.unchanged }}>変更なし</label></td>
+        {% if ext['items']|selectattr('order_id')|list %}<td>{% if it.order_id %}<input type="date" name="eta_{{ mid }}" value="{{ it.promised_date or '' }}" style="padding:5px 8px"><div class="small muted">発注の入荷予定に記録</div>{% else %}—{% endif %}</td>{% endif %}
+        <td class="small muted" style="max-width:320px">{{ it.snippet }}</td>
+      </tr>{% endfor %}</tbody></table></div>
+    {% if r.status == 'new' %}<div class="row" style="padding:14px 18px"><button>反映する</button>
+      <span class="hint" style="margin:0">価格は「見積回答」として履歴とグラフに記録し、確認期限を更新します。</span></div>{% endif %}
+  </form>
+  {% endif %}
+  {% if r.status == 'new' %}<form method="post" action="{{ url_for('inbox_action', iid=r.id, action='ignore') }}" class="row"><button class="ghost">対応不要にする</button></form>{% endif %}
+</div>
+<div class="card"><h2>本文</h2><div class="comment" style="max-height:640px;overflow:auto;font-size:13px">{{ r.body }}</div></div>
+</div>
+{% endblock %}

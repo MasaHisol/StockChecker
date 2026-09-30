@@ -5,7 +5,7 @@
 {% set n_ok = rows|selectattr('status','equalto','ok')|list|length %}
 <div class="page-head">
   <div><h1>部材一覧</h1><div class="sub">{{ rows|length }} 件 ・ チェックを入れるとまとめて操作できます</div></div>
-  <div class="row"><a class="btn ghost" href="{{ url_for('import_csv') }}">価格表の取込</a><a class="btn" href="{{ url_for('material_new') }}">＋ 部材を登録</a></div>
+  <div class="row"><a class="btn ghost" href="{{ url_for('excel_page') }}">Excel で一括登録</a><a class="btn ghost" href="{{ url_for('excel_export') }}">Excel で出力</a><a class="btn" href="{{ url_for('material_new') }}">＋ 部材を登録</a></div>
 </div>
 
 <form method="post" action="{{ url_for('materials_bulk') }}" class="card flush" data-bulk>
@@ -37,6 +37,7 @@
       data-text="{{ (m.part_number ~ ' ' ~ m.name ~ ' ' ~ (m.maker or '') ~ ' ' ~ (m.supplier_name or ''))|lower }}">
     <td class="check"><input type="checkbox" name="ids" value="{{ m.id }}" aria-label="{{ m.part_number }} を選択"></td>
     <td>{% if r.status == 'quote' %}<span class="pill crit">● 要見積</span>{% elif r.status == 'warn' %}<span class="pill warn">▲ 注意</span>{% else %}<span class="pill good">✓ OK</span>{% endif %}
+      {% if r.orders %}<div style="margin-top:4px"><a class="pill info" href="{{ url_for('order_detail', oid=r.orders[0].id) }}">発注中{{ (' ' ~ r.orders|length) if r.orders|length > 1 }}</a></div>{% endif %}
       {% if r.pending %}<div style="margin-top:4px"><a class="pill {{ 'warn' if r.pending.status == 'draft' else 'info' }}" href="{{ url_for('email_edit', eid=r.pending.id) }}">{{ '下書き' if r.pending.status == 'draft' else '回答待ち' }}</a></div>{% endif %}</td>
     <td><a href="{{ url_for('material_detail', mid=m.id) }}"><b>{{ m.part_number }}</b></a><div class="muted small">{{ m.name }}</div>
       {% if r.findings or r.reminders %}<ul class="reasons">{% for f in r.findings %}<li>{{ f.message }}</li>{% endfor %}{% for a in r.reminders %}<li>{{ a.message }}</li>{% endfor %}</ul>{% endif %}</td>

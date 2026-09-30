@@ -22,13 +22,16 @@
   <a class="kpi" href="#todo-quote"><div class="label"><span class="dot crit"></span>見積が必要</div><div class="value">{{ quote|length }}<small>件</small></div></a>
   <a class="kpi" href="#todo-confirm"><div class="label"><span class="dot warn"></span>価格・納期の確認時期</div><div class="value">{{ confirm|length }}<small>件</small></div></a>
   <a class="kpi" href="#todo-reply"><div class="label"><span class="dot info"></span>回答待ち (督促時期)</div><div class="value">{{ noreply|length }}<small>件</small></div></a>
+  <a class="kpi" href="{{ url_for('orders_page') }}"><div class="label"><span class="dot info"></span>発注中 (未入荷)</div><div class="value">{{ n_open_orders }}<small>件</small></div></a>
+  <a class="kpi" href="#todo-order"><div class="label"><span class="dot crit"></span>入荷遅れ・納期未回答</div><div class="value">{{ order_alerts|length }}<small>件</small></div></a>
+  <a class="kpi" href="{{ url_for('inbox_page') }}"><div class="label"><span class="dot warn"></span>未処理の受信メール</div><div class="value">{{ n_inbox }}<small>通</small></div></a>
   <a class="kpi" href="{{ url_for('emails') }}"><div class="label"><span class="dot warn"></span>未送信の下書き</div><div class="value">{{ drafts|length }}<small>通</small></div></a>
 </div>
 
 <div class="split">
 <div>
   <div class="card flush" id="todo-quote">
-    <div class="card-head"><h2>見積が必要な部材</h2><a class="small" href="{{ url_for('materials', status='quote') }}">一覧で見る</a></div>
+    <div class="card-head"><h2>見積が必要な部材</h2><span class="small muted">発注済みの部材は除く ・ <a href="{{ url_for('materials', status='quote') }}">一覧で見る</a></span></div>
     {% if quote %}<ul class="todo">
     {% for r in quote[:20] %}{% set m = r.m %}
       <li><div class="ic crit">!</div>
@@ -41,6 +44,21 @@
         </div></li>
     {% endfor %}</ul>
     {% else %}<div class="empty">見積が必要な部材はありません。</div>{% endif %}
+  </div>
+
+  <div class="card flush" id="todo-order">
+    <div class="card-head"><h2>発注: 入荷遅れ・納期の回答待ち</h2><a class="small" href="{{ url_for('orders_page') }}">発注・入荷の一覧</a></div>
+    {% if order_alerts %}<ul class="todo">
+    {% for r, a in order_alerts %}{% set m = r.m %}
+      <li><div class="ic {{ 'crit' if a.kind == 'delivery_late' else 'warn' }}">{{ '!' if a.kind == 'delivery_late' else '?' }}</div>
+        <div class="body"><a href="{{ url_for('material_detail', mid=m.id) }}" class="strong">{{ m.name }}</a> <span class="muted small">{{ m.part_number }}</span>
+          <div class="small" style="color:var(--ink-2)">{{ a.message }}</div></div>
+        <div class="acts">
+          <form method="post" action="{{ url_for('order_action', oid=a.ref_order_id, action='inquiry') }}"><button class="sm">納期確認メール</button></form>
+          <a class="btn ghost sm" href="{{ url_for('order_detail', oid=a.ref_order_id) }}">納期・入荷を記録</a>
+        </div></li>
+    {% endfor %}</ul>
+    {% else %}<div class="empty">遅れている発注はありません。</div>{% endif %}
   </div>
 
   <div class="card flush" id="todo-confirm">
@@ -99,7 +117,7 @@
     {% endif %}
   </div>
   <div class="card">
-    <h2>最近の動き</h2>
+    <div class="card-head"><h2>最近の動き</h2><a class="small" href="{{ url_for('history') }}">操作履歴</a></div>
     {% if activity %}<ul class="feed">{% for a in activity %}
       <li><span class="t">{{ a.created_at[5:16] }}</span><span><b>{{ a.user_name or '自動' }}</b> {{ action_labels.get(a.action, a.action) }}{% if a.part_number %} <a href="{{ url_for('material_detail', mid=a.material_id) }}">{{ a.part_number }}</a>{% endif %}
         {% if a.detail %}<div class="small muted">{{ a.detail }}</div>{% endif %}</span></li>

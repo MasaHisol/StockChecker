@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block body %}
-<div class="page-head"><div><h1>設定</h1><div class="sub">チーム全体に適用される設定です (管理者のみ)。</div></div>
+<div class="page-head"><div><h1>設定</h1><div class="sub">チーム全体に適用される設定です。変更は操作履歴に残ります。</div></div>
   <a class="btn ghost" href="{{ url_for('templates_page') }}">メールテンプレートを編集</a></div>
 <form method="post">
 <div class="grid g2">
@@ -40,7 +40,7 @@
   {% if lan_urls %}
   <p style="margin-top:0">同じ社内ネットワークのメンバーは、ブラウザで次のアドレスを開くとこのアプリを使えます。</p>
   {% for u in lan_urls %}<div><code style="font-size:14px">{{ u }}</code></div>{% endfor %}
-  <p class="small muted">メンバーは「チーム・仕入先」で追加し、ログイン用のメールアドレスとパスワードを伝えてください。このアプリを起動した PC の電源が入っている間だけ使えます。</p>
+  <p class="small muted">ログインは不要です。開くと最初に名前を選ぶ欄が出て、その名前で操作の履歴が残ります。このアプリを起動した PC の電源が入っている間だけ使えます。</p>
   {% else %}
   <p class="small" style="margin-top:0">現在はこの PC からのみ使える設定です。チームで使うには、常時起動している PC (または社内サーバー) で <code>stockchecker.ini</code> の <code>[app]</code> に <code>share = 1</code> を設定して再起動してください。起動時に表示されるアドレスをメンバーに伝えます (初回は Windows のファイアウォールの許可が必要です)。</p>
   {% endif %}

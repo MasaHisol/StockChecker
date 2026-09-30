@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head"><div>
+  <div class="sub"><a href="{{ url_for('orders_page') }}">発注・入荷</a> / 発注</div>
+  <h1>{{ o.material_name }} <span class="muted" style="font-size:15px">{{ o.part_number }}</span></h1>
+  <div class="sub">{{ o.supplier_name or '発注先未設定' }} ・ 発注日 {{ o.order_date }}{% if o.note %} ・ {{ o.note }}{% endif %}</div></div>
+  <div class="row">{{ order_pill(o) }}<a class="btn ghost" href="{{ url_for('material_detail', mid=o.material_id) }}">部材を開く</a></div></div>
+
+<div class="kpis">
+  <div class="kpi"><div class="label">発注数量</div><div class="value">{{ o.quantity }}<small>{{ o.unit }}</small></div><div class="small muted">{% if o.unit_price is not none %}@¥{{ o.unit_price|yen }} ・ 計 ¥{{ (o.unit_price * o.quantity)|yen }}{% else %}単価未記録{% endif %}</div></div>
+  <div class="kpi"><div class="label">入荷済み</div><div class="value">{{ o.received_qty }}<small>/ {{ o.quantity }}</small></div><div class="small muted">{{ ('最終入荷 ' ~ o.received_date) if o.received_date else 'まだ入荷していません' }}</div></div>
+  <div class="kpi"><div class="label">回答納期 (入荷予定)</div><div class="value" style="font-size:20px">{{ o.promised_date or '未回答' }}</div><div class="small muted">希望納期 {{ o.required_date or '—' }}</div></div>
+</div>
+
+<div class="split">
+<div>
+{% if o.status in ('ordered','confirmed','partial') %}
+<div class="grid g2">
+  <form method="post" action="{{ url_for('order_action', oid=o.id, action='eta') }}" class="card">
+    <h2>納期回答を記録</h2>
+    <label class="f">回答納期 (入荷予定日)</label><input type="date" name="promised_date" value="{{ o.promised_date or '' }}" required>
+    <label class="f">メモ</label><input name="note" placeholder="例: 電話で確認、分納予定 など">
+    <p style="margin-bottom:0"><button>記録</button></p></form>
+  <form method="post" action="{{ url_for('order_action', oid=o.id, action='receive') }}" class="card">
+    <h2>入荷を記録</h2>
+    <div class="form-grid" style="grid-template-columns:1fr 1fr"><div><label class="f">入荷数</label><input type="number" name="quantity" min="1" value="{{ o.quantity - o.received_qty }}"></div>
+      <div><label class="f">入荷日</label><input type="date" name="received_date" value="{{ today }}"></div></div>
+    <label class="f">メモ</label><input name="note" placeholder="納品書番号など">
+    <p style="margin-bottom:0"><button>入荷を記録</button></p>
+    <div class="hint">一部だけ届いた場合は届いた数を入れてください (分納)。</div></form>
+</div>
+<div class="card row" style="justify-content:space-between">
+  <span class="small">納期の回答が無い・遅れている場合は、仕入先に問い合わせるメールをワンタッチで作れます。</span>
+  <div class="row">
+    <form method="post" action="{{ url_for('order_action', oid=o.id, action='inquiry') }}"><button>納期確認メールを作成</button></form>
+    <form method="post" action="{{ url_for('order_action', oid=o.id, action='cancel') }}" onsubmit="return confirm('この発注をキャンセル扱いにしますか？')"><button class="danger">キャンセル</button></form>
+  </div></div>
+{% endif %}
+
+<div class="card flush"><h2>入荷の記録</h2>
+  {% if receipts %}<table><thead><tr><th>入荷日</th><th class="num">数量</th><th>メモ</th><th>記録者</th></tr></thead><tbody>
+  {% for r in receipts %}<tr><td>{{ r.received_date }}</td><td class="num">{{ r.quantity }}</td><td class="small">{{ r.note or '' }}</td><td class="small muted">{{ r.actor or '' }}</td></tr>{% endfor %}</tbody></table>
+  {% else %}<div class="empty">まだ入荷の記録はありません。</div>{% endif %}</div>
+</div>
+<div>
+  <div class="card flush"><h2>関連するメール</h2>
+    {% if mails %}<ul class="feed" style="padding:0 18px 12px">{% for e in mails %}
+      <li><span class="t">{{ e.created_at[5:10] }}</span><span style="flex:1;min-width:0"><a href="{{ url_for('email_edit', eid=e.id) }}">{{ kind_labels[e.kind] }}</a> {{ status_pill(e.status) }}{% if e.answered_at %} <span class="pill good">回答あり</span>{% endif %}
+        <div class="small muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ e.subject }}</div></span></li>{% endfor %}</ul>
+    {% else %}<div class="empty">メールはありません (Web・電話での発注)。</div>{% endif %}</div>
+  <div class="card"><h2>この発注の履歴</h2>
+    {% if hist %}<ul class="feed">{% for h in hist %}<li><span class="t">{{ h.created_at[5:16] }}</span><span><b>{{ h.actor or '自動' }}</b> {{ action_labels.get(h.action, h.action) }}<div class="small muted">{{ h.detail or '' }}</div></span></li>{% endfor %}</ul>
+    {% else %}<div class="small muted">—</div>{% endif %}</div>
+</div>
+</div>
+{% endblock %}

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="page-head"><div><h1>受信メール</h1><div class="sub">仕入先からの返信を取り込み、送ったメールと自動で結び付けて、本文の単価・納期を読み取ります。内容を確認して「反映」すると価格の履歴・発注に記録されます。</div></div></div>
+<div class="grid g2">
+  <form method="post" action="{{ url_for('inbox_upload') }}" enctype="multipart/form-data" class="card">
+    <h2>メールファイルを取り込む</h2>
+    <input type="file" name="files" multiple accept=".eml,.msg,message/rfc822" required>
+    <div class="hint">Outlook ではメールを選んでデスクトップなどにドラッグすると .msg ファイルとして保存できます (複数可)。Gmail・Thunderbird などは「.eml としてダウンロード」。</div>
+    <p style="margin-bottom:0"><button data-busy="取り込み中…">取り込む</button></p>
+  </form>
+  <form method="post" action="{{ url_for('inbox_imap') }}" class="card">
+    <h2>メールサーバーから取り込む</h2>
+    {% if imap_on %}
+      <div class="row"><label class="small">直近</label><input name="days" type="number" min="1" max="90" value="14" style="width:80px"><label class="small">日分</label>
+        <button data-busy="確認中…">受信メールを確認</button></div>
+      <div class="hint">送ったメールへの返信と、登録済みの仕入先からのメールだけを取り込みます (それ以外のメールは保存しません)。メールボックスの既読などは変わりません。</div>
+    {% else %}
+      <p class="small muted" style="margin:0">メールサーバー (IMAP) を設定すると、ボタン 1 つで受信トレイから取り込めます。<code>stockchecker.ini</code> の <code>[imap]</code> に host / user / password を設定して再起動してください (Gmail・Microsoft 365 はアプリ パスワードが必要な場合があります)。</p>
+    {% endif %}
+  </form>
+</div>
+<div class="tabs">
+  <a href="{{ url_for('inbox_page', tab='new') }}" class="{{ 'on' if tab == 'new' }}">未処理<span class="count">{{ counts.new }}</span></a>
+  <a href="{{ url_for('inbox_page', tab='applied') }}" class="{{ 'on' if tab == 'applied' }}">反映済み</a>
+  <a href="{{ url_for('inbox_page', tab='ignored') }}" class="{{ 'on' if tab == 'ignored' }}">対応不要</a>
+  <a href="{{ url_for('inbox_page', tab='all') }}" class="{{ 'on' if tab == 'all' }}">すべて</a>
+</div>
+<div class="card flush">
+{% if rows %}
+<div class="scroll"><table>
+<thead><tr><th>受信</th><th>差出人</th><th>件名</th><th>対応する送信メール</th><th>状態</th></tr></thead>
+<tbody>{% for r in rows %}
+<tr><td class="small muted nowrap">{{ (r.received_at or r.created_at)[:16] }}</td>
+  <td class="small">{{ r.supplier_name or r.from_name or '' }}<div class="muted">{{ r.from_addr }}</div></td>
+  <td><a href="{{ url_for('inbox_detail', iid=r.id) }}">{{ r.subject or '(件名なし)' }}</a></td>
+  <td class="small">{% if r.matched_email_id %}<span class="pill good">✓ {{ kind_labels.get(r.matched_kind, '') }}</span><div class="muted" style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.matched_subject }}</div>{% else %}<span class="pill warn">未対応付け</span>{% endif %}</td>
+  <td class="nowrap">{% if r.status == 'new' %}<a class="btn sm" href="{{ url_for('inbox_detail', iid=r.id) }}">確認して反映</a>{% elif r.status == 'applied' %}<span class="pill good">反映済</span>{% else %}<span class="pill off">対応不要</span>{% endif %}
+    {% if r.handled_by %}<div class="small muted">{{ r.handled_by }}</div>{% endif %}</td></tr>
+{% endfor %}</tbody></table></div>
+{% else %}<div class="empty">{{ '未処理の受信メールはありません。' if tab == 'new' else '受信メールはありません。' }}</div>{% endif %}
+</div>
+{% endblock %}

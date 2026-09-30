@@ -1,9 +1,0 @@
-{% extends "base.html" %}
-{% block body %}
-<div class="page-head"><div><h1>パスワード変更</h1><div class="sub">{{ me.name }} ({{ me.email }})</div></div></div>
-<form method="post" class="card" style="max-width:420px">
-  <label class="f">現在のパスワード</label><input name="current" type="password" required autocomplete="current-password">
-  <label class="f">新しいパスワード (6 文字以上)</label><input name="new" type="password" required minlength="6" autocomplete="new-password">
-  <p><button>変更する</button></p>
-</form>
-{% endblock %}

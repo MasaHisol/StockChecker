@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block body %}
 <div class="page-head">
-  <div><h1>価格推移</h1><div class="sub">一括取得・見積回答などで記録した単価の推移 ({{ periods[period] }}) ・ グラフにマウスを乗せると日付と値を表示</div></div>
+  <div><h1>価格推移</h1><div class="sub">一括取得・見積回答・発注などで記録した単価の推移 ({{ periods[period] }}) ・ グラフにマウスを乗せると日付と値を表示</div></div>
+  <a class="btn ghost" href="{{ url_for('charts_export', period=period) }}">Excel で出力</a>
 </div>
 <form method="get" class="card row" style="padding:12px 18px">
   <div class="seg">{% for k, label in periods.items() %}<a href="{{ url_for('charts', period=k, owner=owner or '', q=q) }}" class="{{ 'on' if k == period }}">{{ label }}</a>{% endfor %}</div>

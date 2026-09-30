@@ -50,6 +50,25 @@ def seed(conn):
     c.execute("UPDATE materials SET watch_urls='https://www.monotaro.com/p/0202/9991/' WHERE id=2")
     c.execute("UPDATE materials SET created_at='2026-05-01 09:00:00' WHERE id=4")
     c.commit()
+    # 発注・受信メールのサンプル
+    from . import orders
+    orders.create(c, 3, 1, 20, 28000, (datetime.now() - timedelta(days=12)).strftime("%Y-%m-%d"),
+                       (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d"), actor="山田 太郎")
+    orders.create(c, 2, 2, 5000, 2.1, (datetime.now() - timedelta(days=9)).strftime("%Y-%m-%d"),
+                  "2026-10-31", actor="佐藤 花子")
+    o3 = orders.create(c, 1, 2, 200, 1520, (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d"),
+                       "2026-11-30", actor="山田 太郎")
+    orders.set_eta(c, o3, "2026-11-20", actor="山田 太郎")
+    orders.receive(c, o3, 80, actor="佐藤 花子", note="分納 1 回目")
+    c.execute("INSERT INTO inbox (message_id, from_addr, from_name, subject, received_at, body, source, supplier_id, "
+              "extracted) VALUES ('<demo@x>', 'sales@buhin.example.com', '鈴木', 'Re: 【見積依頼】取付ブラケット', "
+              "datetime('now','localtime'), 'BRKT-A-001 取付ブラケット: 単価 ¥3,200 (税抜)、納期 受注後3週間です。', "
+              "'upload', 1, ?)", ('{"items": [{"material_id": 4, "part_number": "BRKT-A-001", "name": "取付ブラケット (特注)", '
+                                  '"found": true, "order_id": null, "unit_price": 3200, "tax_included": false, '
+                                  '"lead_time_days": 21, "promised_date": null, "unchanged": false, "in_stock": false, '
+                                  '"snippet": "BRKT-A-001 取付ブラケット: 単価 ¥3,200 (税抜)、納期 受注後3週間です。"}], '
+                                  '"order_accepted": false}',))
+    c.commit()
     print("デモデータを投入しました。")
 
 

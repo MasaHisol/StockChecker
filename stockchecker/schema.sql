@@ -149,3 +149,65 @@ CREATE TABLE IF NOT EXISTS comments (
     body TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
+
+-- 発注 (1 部材 1 行。注文メールの送信時、または手動で登録)
+CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+    supplier_id INTEGER REFERENCES suppliers(id),
+    email_id INTEGER REFERENCES emails(id) ON DELETE SET NULL,
+    quantity INTEGER NOT NULL,
+    unit_price REAL,
+    order_date TEXT NOT NULL,          -- 発注日
+    required_date TEXT,                -- 希望納期
+    promised_date TEXT,                -- 仕入先の回答納期 (入荷予定日)
+    received_qty INTEGER NOT NULL DEFAULT 0,
+    received_date TEXT,                -- 最後に入荷した日
+    status TEXT NOT NULL DEFAULT 'ordered',  -- ordered / confirmed / partial / received / cancelled
+    note TEXT,
+    created_by INTEGER REFERENCES staff(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT
+);
+
+-- 入荷記録 (分納に対応)
+CREATE TABLE IF NOT EXISTS receipts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    quantity INTEGER NOT NULL,
+    received_date TEXT NOT NULL,
+    note TEXT,
+    actor TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+-- 取り込んだ受信メール (仕入先からの返信)
+CREATE TABLE IF NOT EXISTS inbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id TEXT UNIQUE,
+    in_reply_to TEXT,
+    from_addr TEXT,
+    from_name TEXT,
+    subject TEXT,
+    received_at TEXT,
+    body TEXT,
+    source TEXT,                       -- imap / upload
+    matched_email_id INTEGER REFERENCES emails(id) ON DELETE SET NULL,
+    match_method TEXT,
+    supplier_id INTEGER REFERENCES suppliers(id),
+    extracted TEXT,                    -- 抽出した価格・納期 (JSON)
+    status TEXT NOT NULL DEFAULT 'new', -- new / applied / ignored
+    handled_by TEXT,
+    handled_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+-- Excel 取込のプレビュー (確認後に反映)
+CREATE TABLE IF NOT EXISTS import_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    filename TEXT,
+    data TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'preview',  -- preview / applied
+    actor TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
